@@ -1,41 +1,42 @@
 import sys
+
+from PyQt6.QtCore import QCoreApplication
+from PyQt6.QtGui import QIcon
 from QtLogger import QtLogger
 
-from PyQt6.QtWidgets import QApplication, QMainWindow, QPushButton, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import QApplication, QMainWindow, QPushButton, QVBoxLayout, QWidget, QTabWidget, QLabel
+
+from hardware import mirrors
+from ui.MapTab import MapTab, MapTab
 
 
-# Subclass QMainWindow to customize your application's main window
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
+        self.setWindowTitle("ΣNV")
+        self.setWindowIcon(QIcon("assets/icon.png"))
 
-        self.central_widget = QWidget()
-
-        self.setCentralWidget(self.central_widget)
-
-        self.layout = QVBoxLayout()
-
-        self.central_widget.setLayout(self.layout)
-
-        self.button = QPushButton("Log something")
-
-        self.button.clicked.connect(self.log_something)
-
-        self.layout.addWidget(self.button)
+        layout = QVBoxLayout()
 
         self.logger = QtLogger()
+        self.logger.start()
+        self.logger.setMaximumHeight(72)
 
-        self.layout.addWidget(self.logger)
+        tabs = QTabWidget()
+        map_tab = MapTab(self.logger)
+        tabs.addTab(map_tab, "Картирование")
 
-        def log_something(self):
-            self.logger.log("This is a log", "info")
+        layout.addWidget(tabs)
+        layout.addWidget(self.logger)
 
-app = QApplication(sys.argv)
+        central_widget = QWidget()
+        central_widget.setLayout(layout)
+        self.setCentralWidget(central_widget)
 
-window = MainWindow()
-window.show()
-
-app.exec()
-# Press the green button in the gutter to run the script.
 if __name__ == '__main__':
-    print_hi('PyCharm')
+    QCoreApplication.setApplicationName("ΣNV")
+    QCoreApplication.setOrganizationDomain("NANOCENTER")
+    app = QApplication([])
+    window = MainWindow()
+    window.show()
+    app.exec()
