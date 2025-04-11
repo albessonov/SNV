@@ -2,10 +2,12 @@ from random import random
 
 import matplotlib
 import numpy as np
-from PyQt6.QtCore import QThread, pyqtSignal
+from PyQt6.QtCore import QThread, pyqtSignal, QUrl
 from PyQt6.QtWidgets import QWidget, QVBoxLayout
 from matplotlib import pyplot as plt
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+from PyQt6.QtMultimedia import QSoundEffect
+
 
 
 class PlotDataThread(QThread):
@@ -44,3 +46,8 @@ class MapTab(QWidget):
 
         # Перерисовываем график
         self.canvas.draw()
+
+        self.sound = QSoundEffect(self)
+        self.sound.setSource(QUrl.fromLocalFile(r"C:\Users\verrg\Projects\SNV\assets\finished.wav"))
+
+        self.sound.play()
