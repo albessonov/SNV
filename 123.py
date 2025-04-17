@@ -1,9 +1,4 @@
-"""from socket import *
-server = socket(AF_INET, SOCK_DGRAM)
-#IP-v4 169.254.120.95
-server.bind(('169.254.120.95', 5353))
-data, client_address = server.recvfrom(2**9)
-print(f"Получены данные от {client_address}: {data.decode()}")"""
+
 # Global variable to signal when to stop sniffing and return data
 import struct
 from scapy.all import sniff

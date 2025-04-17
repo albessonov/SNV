@@ -7,7 +7,7 @@ from QtLogger import QtLogger
 from PyQt6.QtWidgets import QApplication, QMainWindow, QPushButton, QVBoxLayout, QWidget, QTabWidget, QLabel
 
 from hardware import mirrors
-from ui.MapTab import MapTab, MapTab
+from ui.CorrelationTab import  CorrelationTab
 
 
 class MainWindow(QMainWindow):
@@ -23,8 +23,8 @@ class MainWindow(QMainWindow):
         self.logger.setMaximumHeight(72)
 
         tabs = QTabWidget()
-        map_tab = MapTab(self.logger)
-        tabs.addTab(map_tab, "Картирование")
+        correlation_tab = CorrelationTab(self.logger)
+        tabs.addTab(correlation_tab, "Картирование")
 
         layout.addWidget(tabs)
         layout.addWidget(self.logger)
