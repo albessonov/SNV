@@ -37,8 +37,9 @@ for t1, t2 in zip(all_t1, all_t2):
 # Нормализация
 avg_n1 = np.mean([len(t) for t in all_t1])
 avg_n2 = np.mean([len(t) for t in all_t2])
-norm_factor = len(all_t1) * avg_n1 * avg_n2 * bin_width_ns
-g2 = cross_corr / norm_factor
+#norm_factor = len(all_t1) * avg_n1 * avg_n2 * bin_width_ns
+#g2 = cross_corr / norm_factorf
+g2 = cross_corr
 
 # Лаги (в наносекундах)
 lags = (np.arange(len(cross_corr)) - (num_bins - 1)) * bin_width_ns
