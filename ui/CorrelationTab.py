@@ -1,15 +1,34 @@
 import time
+from collections import deque
+import pyqtgraph as pg
 
 import numpy as np
 from PyQt6.QtCore import QThread, pyqtSignal, QUrl
 from PyQt6.QtWidgets import QWidget, QVBoxLayout
+from fast_histogram import histogram1d
 from matplotlib import pyplot as plt
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from PyQt6.QtMultimedia import QSoundEffect
 import struct
 from PyQt6.QtCore import QThread, pyqtSignal
-from numpy import correlate
 from scapy.all import sniff
+
+class HistWorker(QThread):
+    result_ready = pyqtSignal(np.ndarray)
+
+    def __init__(self, logger, data, bins, tau_max_ns):
+        super().__init__()
+        self.logger = logger
+        self.data = data
+        self.bins = bins
+        self.tau_max_ns = tau_max_ns
+
+    def run(self):
+        deltas = np.hstack([t1[:, None] - t2 for t1, t2 in self.data])
+        valid = deltas[(deltas > -self.tau_max_ns) & (deltas < self.tau_max_ns)]
+        hist = histogram1d(valid, bins=len(self.bins) - 1, range=(-self.tau_max_ns, self.tau_max_ns))
+
+        self.result_ready.emit(hist)
 
 
 class SniffThread(QThread):
@@ -65,120 +84,95 @@ class SniffThread(QThread):
                     self.logger.log(f"Неудачный парсинг пакета", "Error", "packet_callback")
 
         try:
-            sniff(iface="Ethernet", filter="udp and src host 192.168.1.2", prn=packet_callback, count=0)
+            #sniff(iface="Ethernet", filter="udp and src host 192.168.1.2", prn=packet_callback, count=0)
+            while 1:
+                self.packet_signal.emit({
+                    "flag": True,
+                    "tp1_r": np.array([56519680.6, 56520984.3]),
+                    "tp2_r": np.array([56518606.1, 56520973.2])})
+                time.sleep(0.1)
         except Exception as e:
             self.logger.log(f"{e}", "Error", "SniffThread")
-
-
-def cross_correlation(timestamps1, timestamps2, bin_size=1.0):
-    """
-    Вычисляет кросс-корреляцию между двумя наборами временных меток
-    с возможностью визуализации.
-
-    Параметры:
-    timestamps1 (array): Временные метки первого детектора (в нс)
-    timestamps2 (array): Временные метки второго детектора (в нс)
-    bin_size (float): Размер бина в наносекундах
-
-    Возвращает:
-    lags (array): Массив временных задержек
-    correlation (array): Нормированные значения корреляции
-    """
-    # Создаем общий временной диапазон
-    start_time = min(min(timestamps1), min(timestamps2))
-    end_time = max(max(timestamps1), max(timestamps2))
-
-    # Создаем временные оси с выбранным бином
-    time_axis = np.arange(start_time, end_time + bin_size, bin_size)
-
-    # Создаем гистограммы
-    hist1, _ = np.histogram(timestamps1, bins=time_axis)
-    hist2, _ = np.histogram(timestamps2, bins=time_axis)
-
-    # Вычисляем кросс-корреляцию
-    correlation = np.correlate(hist1, hist2, mode='full')
-
-    # Рассчитываем временные задержки
-    lags = np.arange(-len(hist2) + 1, len(hist1)) * bin_size
-
-    # Нормализация
-    norm = (len(timestamps1) * len(timestamps2) * bin_size) / (end_time - start_time)
-    correlation = correlation / norm if norm != 0 else correlation
-
-    return lags, correlation
 
 
 class CorrelationTab(QWidget):
     def __init__(self, logger):
         super().__init__()
-        self.photon_data = []
-        self.init = False
         self.logger = logger
+        self.photon_data = deque(maxlen=10000)
+        self.hist_data = None
+        self.bins = None
+        self.tau_max_ns = 100
+        self.bin_width_ns = 0.1
+        self.num_bins = None
+        self.init = False
 
         layout = QVBoxLayout()
-        self.canvas = FigureCanvas(plt.figure())
-        layout.addWidget(self.canvas)
+        self.plot_widget = pg.PlotWidget()
+        self.plot_widget.setTitle("g2", size="13pt")
+        self.plot_widget.setLabel("left", "Счёты", size="13pt")
+        self.plot_widget.setLabel("bottom", "Время [нс]", size="13pt")
+        self.plot_widget.showGrid(x=True, y=True)
+
+        layout.addWidget(self.plot_widget)
+        self.setLayout(layout)
+
         self.sniff_thread = SniffThread(self.logger)
         self.sniff_thread.packet_signal.connect(self.packet_received)
         self.sniff_thread.start()
-        self.setLayout(layout)
 
     def packet_received(self, packet):
-        if packet['flag'] and not self.init:
-            self.logger.log("Init", "info", "packet_received")
+        if not self.init and packet['flag']:
+            # Инициализация при первом флаговом пакете
+            self.num_bins = int(np.round(self.tau_max_ns / self.bin_width_ns))
+            self.bins = np.linspace(-self.tau_max_ns, self.tau_max_ns, self.num_bins + 1)
+            self.hist_data = np.zeros(self.num_bins)
             self.init = True
+            self.logger.log("Инициализация гистограммы", "Info", "CorrelationTab")
+
+        if self.init:
             self.photon_data.append(packet)
-        elif not packet['flag'] and self.init:
-            self.photon_data.append(packet)
-        elif packet['flag'] and self.init:
-            # Собрали полный период
-            self.logger.log("Собрали полный период", "info", "packet_received")
+            if packet['flag']:
+                self.process_data()
 
-            tau_max_ns = 100  # 100 нс
-            bin_width_ns = 1
-            num_bins = int(np.round(tau_max_ns / bin_width_ns))
-            bins = np.linspace(-tau_max_ns, tau_max_ns, num_bins + 1)
+    def process_data(self):
+        all_t1 = [d["tp1_r"] for d in self.photon_data]
+        all_t2 = [d["tp2_r"] for d in self.photon_data]
 
-            all_t1 = [self.photon_data[i]["tp1_r"] for i in range(len(self.photon_data))]
-            all_t2 = [self.photon_data[i]["tp2_r"] for i in range(len(self.photon_data))]
+        # Фильтрация данных
+        filtered_t1 = [t[(t > 0)] for t in all_t1]
+        filtered_t2 = [t[(t > 0)] for t in all_t2]
 
+        # Запуск расчета гистограммы
+        self.hist_worker = HistWorker(
+            self.logger,
+            list(zip(filtered_t1, filtered_t2)),
+            self.bins,
+            self.tau_max_ns
+        )
+        self.hist_worker.result_ready.connect(self.update_plot)
+        self.hist_worker.start()
 
-            # Проверка, что метки не превышают tau_max_ns
-            all_t1 = [t[(t > 0)] for t in all_t1]
-            all_t2 = [t[(t > 0)] for t in all_t2]
+    def update_plot(self, new_hist):
+        try:
+            if self.hist_data is None:
+                return
 
-            # Предварительный расчет гистограммы
-            hist = np.zeros(len(bins) - 1, dtype=np.int64)
+            # Накопление данных
+            self.hist_data += new_hist
 
-            for t1, t2 in zip(all_t1, all_t2):
-                # Векторизованный расчет всех разниц
-                delta = t1[:, None] - t2  # Создает матрицу разниц
-                # Фильтрация за один шаг
-                mask = (delta > -tau_max_ns) & (delta < tau_max_ns)
-                valid_deltas = delta[mask]
+            # Обновление графика
+            self.plot_widget.clear()
+            self.plot_widget.plot(
+                self.bins,
+                self.hist_data,
+                stepMode=True,
+                fillLevel=0)
 
-                # Прямое добавление в гистограмму
-                if valid_deltas.size > 0:
-                    hist += np.histogram(valid_deltas, bins=bins)[0]
+        except Exception as e:
+            self.logger.log(f"Ошибка обновления графика: {str(e)}", "Error", "update_plot")
 
-            bin_edges = bins
+    def closeEvent(self, event):
+        self.sniff_thread.terminate()
+        super().closeEvent(event)
 
-            # Очищаем текущий график, чтобы предотвратить наложение осей
-            self.canvas.figure.clf()  # Полностью очищаем текущую фигуру
-
-            # Создаем новый subplot
-            ax = self.canvas.figure.add_subplot(111)
-            ax.bar(bin_edges[:-1], hist)
-            ax.set_title("Случайный график")
-            ax.set_xlabel('Задержка τ, нс')
-            ax.set_ylabel('g²(τ)')
-            ax.set_xlim(-tau_max_ns * 1.05, tau_max_ns * 1.05)
-
-            # Перерисовываем график
-            self.canvas.draw()
-
-
-            self.sound = QSoundEffect(self)
-            self.sound.setSource(QUrl.fromLocalFile(r"C:\Users\verrg\Projects\SNV\assets\finished.wav"))
-
-            self.sound.play()
