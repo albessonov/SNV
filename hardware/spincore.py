@@ -14,6 +14,7 @@ pdPWM = lib.pb_PWM
 pdPWM.restype = c_int
 pdPWM.argtypes = [c_int, POINTER(POINTER(c_int)), c_int]
 
+
 def _config_builder(num_channels, channel_numbers, impulse_counts, start_times, stop_times):
     result = [str(num_channels)]
 
@@ -35,13 +36,18 @@ def _config_builder(num_channels, channel_numbers, impulse_counts, start_times, 
 
     return ''.join(result)
 
-#TODO для теста, потом удалить
+
+# TODO для теста, потом удалить
 result_str = _config_builder(2, [0, 1], [2, 3], [0, 350, 0, 200, 350], [150, 400, 150, 300, 400])
 
 t = result_str.encode('utf-8')
 
 print(t)
 
-def impulse_builder(num_channels: int, channel_numbers: list[int], impulse_counts: list[int], start_times: list[int], stop_times: list[int], a, b ,c):
-    #TODO добавить пояснение про a,b,c
-    setPb(StrBuild(create_string_buffer(_config_builder(num_channels, channel_numbers, impulse_counts, start_times, stop_times).encode("utf-8"))), a, b, c)
+
+def impulse_builder(num_channels: int, channel_numbers: list[int], impulse_counts: list[int], start_times: list[int],
+                    stop_times: list[int], a, b, c):
+    # TODO добавить пояснение про a,b,c
+    setPb(StrBuild(create_string_buffer(
+        _config_builder(num_channels, channel_numbers, impulse_counts, start_times, stop_times).encode("utf-8"))), a, b,
+          c)

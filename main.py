@@ -1,13 +1,9 @@
-import sys
-
 from PyQt6.QtCore import QCoreApplication
 from PyQt6.QtGui import QIcon
+from PyQt6.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QWidget, QTabWidget
 from QtLogger import QtLogger
 
-from PyQt6.QtWidgets import QApplication, QMainWindow, QPushButton, QVBoxLayout, QWidget, QTabWidget, QLabel
-
-from hardware import mirrors
-from ui.CorrelationTab import  CorrelationTab
+from ui.CorrelationTab import CorrelationTab
 
 
 class MainWindow(QMainWindow):
@@ -32,6 +28,7 @@ class MainWindow(QMainWindow):
         central_widget = QWidget()
         central_widget.setLayout(layout)
         self.setCentralWidget(central_widget)
+
 
 if __name__ == '__main__':
     QCoreApplication.setApplicationName("ΣNV")

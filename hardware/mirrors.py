@@ -87,7 +87,7 @@ def move_to_position(serial_device: Serial, center: [float, float], position: [f
     elif center[1] < 0:
         y_center_voltage = 1.650 + length_to_voltage(abs(center[1]), 'y')
 
-    if not(0 <= x_center_voltage <= 3.3 and 0 <= y_center_voltage <= 3.3):
+    if not (0 <= x_center_voltage <= 3.3 and 0 <= y_center_voltage <= 3.3):
         raise ValueError("Запрещённое значение напряжения для центра СК")
 
     x_voltage, y_voltage = None, None
@@ -101,7 +101,7 @@ def move_to_position(serial_device: Serial, center: [float, float], position: [f
     elif position[1] < center[1]:
         y_voltage = format(y_center_voltage + length_to_voltage(abs(position[1]), 'y'), '.3f')
 
-    if not(0 <= float(x_voltage) <= 3.3 and 0 <= float(y_voltage) <= 3.3):
+    if not (0 <= float(x_voltage) <= 3.3 and 0 <= float(y_voltage) <= 3.3):
         raise ValueError("Запрещённое значение напряжения для точки установки зеркал")
 
     move_command(serial_device, [x_voltage, y_voltage])
@@ -141,7 +141,7 @@ def get_position(serial_device: Serial) -> [float, float]:
 
             return [x_length, y_length]
         else:
-            #TODO сюда логгер с инфо о проблеме
+            # TODO сюда логгер с инфо о проблеме
             pass
     else:
         # TODO сюда логгер с инфо о проблеме

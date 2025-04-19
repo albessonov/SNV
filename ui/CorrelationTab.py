@@ -1,17 +1,13 @@
+import struct
 import time
 from collections import deque
-import pyqtgraph as pg
 
 import numpy as np
-from PyQt6.QtCore import QThread, pyqtSignal, QUrl
+import pyqtgraph as pg
+from PyQt6.QtCore import QThread, pyqtSignal
 from PyQt6.QtWidgets import QWidget, QVBoxLayout
 from fast_histogram import histogram1d
-from matplotlib import pyplot as plt
-from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
-from PyQt6.QtMultimedia import QSoundEffect
-import struct
-from PyQt6.QtCore import QThread, pyqtSignal
-from scapy.all import sniff
+
 
 class HistWorker(QThread):
     result_ready = pyqtSignal(np.ndarray)
@@ -84,7 +80,7 @@ class SniffThread(QThread):
                     self.logger.log(f"Неудачный парсинг пакета", "Error", "packet_callback")
 
         try:
-            #sniff(iface="Ethernet", filter="udp and src host 192.168.1.2", prn=packet_callback, count=0)
+            # sniff(iface="Ethernet", filter="udp and src host 192.168.1.2", prn=packet_callback, count=0)
             while 1:
                 self.packet_signal.emit({
                     "flag": True,
@@ -175,4 +171,3 @@ class CorrelationTab(QWidget):
     def closeEvent(self, event):
         self.sniff_thread.terminate()
         super().closeEvent(event)
-
