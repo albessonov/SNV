@@ -5,12 +5,58 @@ from collections import deque
 import numpy as np
 import pyqtgraph as pg
 from PyQt6.QtCore import QThread, pyqtSignal
-from PyQt6.QtWidgets import QWidget, QVBoxLayout
+from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout
 from fast_histogram import histogram1d
+from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
+from matplotlib.figure import Figure
 from scapy.compat import raw
 from scapy.layers.l2 import Ether
 from scapy.sendrecv import sniff
 
+class MplCanvas(FigureCanvasQTAgg):
+
+    def __init__(self, parent=None, width=5, height=4, dpi=100):
+        fig = Figure(figsize=(width, height), dpi=dpi)
+        self.axes = fig.add_subplot(111)
+        super(MplCanvas, self).__init__(fig)
+
+class CounterWorker(QThread):
+    def __init__(self, *args):
+        super(CounterWorker, self).__init__()
+        self.args = args
+        self.interval = 0.1
+        self.window_size = 100
+        self.canvas = self.args[0]
+        self.photon_data = self.args[1]
+        self.x_data = np.linspace(0, self.window_size, self.window_size)
+        self.y_data = np.zeros(self.window_size)
+        self.line, = self.canvas.axes.plot(self.x_data, self.y_data, lw=2)
+        self.canvas.axes.set_xlabel('Время')
+        self.canvas.axes.set_ylabel('Отсчеты')
+        self.canvas.axes.grid()
+        self.is_killed = False
+
+    def run(self):
+        while not self.is_killed:
+            try:
+                data_point = self.photon_data[-1]['cnt_photon_1']
+                print(self.photon_data[-1]['cnt_photon_2'])
+            except Exception:
+                data_point = 0
+            time.sleep(1)
+            self.y_data = np.roll(self.y_data, -1)
+            self.y_data[-1] = data_point
+
+            max_data = np.max(self.y_data)
+            min_data = np.min(self.y_data)
+            self.canvas.axes.set_xlim(0, 100)
+            self.canvas.axes.set_ylim(min_data, max_data + 5)
+            self.line.set_ydata(self.y_data)
+            self.canvas.draw()
+            self.canvas.flush_events()
+
+        self.canvas.axes.clear()
+        self.canvas.axes.cla()
 
 class HistWorker(QThread):
     result_ready = pyqtSignal(np.ndarray)
@@ -24,11 +70,7 @@ class HistWorker(QThread):
 
     def run(self):
         deltas = np.hstack([t1[:, None] - t2 for t1, t2 in self.data])
-        """valid = deltas[(deltas > -self.tau_max_ns) & (deltas < self.tau_max_ns)]
-        hist = histogram1d(valid, bins=len(self.bins) - 1, range=(-self.tau_max_ns, self.tau_max_ns))"""
-
-        #FIXME !!!
-        valid = deltas
+        valid = deltas[(deltas > -self.tau_max_ns) & (deltas < self.tau_max_ns)]
         hist = histogram1d(valid, bins=len(self.bins) - 1, range=(-self.tau_max_ns, self.tau_max_ns))
 
         self.result_ready.emit(hist)
@@ -80,6 +122,7 @@ class SniffThread(QThread):
                         "tp1_r": np.array(tp1_r),
                         "tp2_r": np.array(tp2_r)
                     }
+                    #print(result)
                     # Отправляем данные через сигнал
                     self.packet_signal.emit(result)
                 except Exception:
@@ -140,27 +183,34 @@ class CorrelationTab(QWidget):
         self.photon_data = deque(maxlen=10000)
         self.hist_data = None
         self.bins = None
-        #FIXME
-        #self.tau_max_ns = 100
-        self.tau_max_ns = 5800235
-        #self.bin_width_ns = 0.1
-        self.bin_width_ns = 1002
+        self.tau_max_ns = 100
+        self.bin_width_ns = 0.001
         self.num_bins = None
         self.init = False
 
         layout = QVBoxLayout()
+
+        plots_layout = QHBoxLayout()
+        self.canvas = MplCanvas(self, width=5, height=4, dpi=90)
+
         self.plot_widget = pg.PlotWidget()
         self.plot_widget.setTitle("g2", size="13pt")
         self.plot_widget.setLabel("left", "Счёты", size="13pt")
         self.plot_widget.setLabel("bottom", "Время [нс]", size="13pt")
         self.plot_widget.showGrid(x=True, y=True)
 
-        layout.addWidget(self.plot_widget)
+        plots_layout.addWidget(self.canvas)
+        plots_layout.addWidget(self.plot_widget)
+
+        layout.addLayout(plots_layout)
         self.setLayout(layout)
 
         self.sniff_thread = SniffThread(self.logger)
         self.sniff_thread.packet_signal.connect(self.packet_received)
         self.sniff_thread.start()
+
+        self.plot_thread = CounterWorker(self.canvas, self.photon_data)
+        self.plot_thread.start()
 
     def packet_received(self, packet):
         if not self.init and packet['flag']:
