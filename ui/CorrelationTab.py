@@ -7,6 +7,7 @@ import pyqtgraph as pg
 from PyQt6.QtCore import QThread, pyqtSignal
 from PyQt6.QtWidgets import QWidget, QVBoxLayout
 from fast_histogram import histogram1d
+from scapy.sendrecv import sniff
 
 
 class HistWorker(QThread):
@@ -52,17 +53,16 @@ class SniffThread(QThread):
                     flag = (byte6 >> 7) & 1
                     cnt_photon_1 = struct.unpack('<H', payload[6:8])[0]
                     cnt_photon_2 = struct.unpack('<H', payload[8:10])[0]
+
                     tp1 = [int.from_bytes(payload[10 + 4 * i:14 + 4 * i], byteorder="little") for i in range(0, 5 + 1)]
                     tp1_a = [np.round((tp1[i] & 0x1F) * 0.18, 1) for i in range(len(tp1))]  # ns
                     tp1_b = [np.round((tp1[i] >> 7) * 5, 1) for i in range(len(tp1))]  # ns
                     tp1_r = [(tp1_a[i] + tp1_b[i]) for i in range(len(tp1_a))]  # ns
-                    # print("a",tp1_r)
 
                     tp2 = [int.from_bytes(payload[34 + 4 * i:38 + 4 * i], byteorder="little") for i in range(0, 5 + 1)]
                     tp2_a = [np.round((tp2[i] & 0x1F) * 0.18, 1) for i in range(len(tp2))]  # ns
                     tp2_b = [np.round((tp2[i] >> 7) * 5, 1) for i in range(len(tp2))]  # ns
                     tp2_r = [(tp2_a[i] + tp2_b[i]) for i in range(len(tp2_a))]  # ns
-                    # print("b", tp2_r)
 
                     # Создаем словарь с результатами
                     # FIXME Есть определённая избыточность в получаемых данных, стоит разделить на два метода: один чисто для счёта фотонов, другой для корелляции
@@ -80,13 +80,7 @@ class SniffThread(QThread):
                     self.logger.log(f"Неудачный парсинг пакета", "Error", "packet_callback")
 
         try:
-            # sniff(iface="Ethernet", filter="udp and src host 192.168.1.2", prn=packet_callback, count=0)
-            while 1:
-                self.packet_signal.emit({
-                    "flag": True,
-                    "tp1_r": np.array([56519680.6, 56520984.3]),
-                    "tp2_r": np.array([56518606.1, 56520973.2])})
-                time.sleep(0.1)
+            sniff(iface="Ethernet", filter="udp and src host 192.168.1.2", prn=packet_callback, count=0)
         except Exception as e:
             self.logger.log(f"{e}", "Error", "SniffThread")
 
