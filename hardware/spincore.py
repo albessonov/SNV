@@ -37,17 +37,18 @@ def _config_builder(num_channels, channel_numbers, impulse_counts, start_times, 
     return ''.join(result)
 
 
-# TODO для теста, потом удалить
-result_str = _config_builder(2, [0, 1], [2, 3], [0, 350, 0, 200, 350], [150, 400, 150, 300, 400])
+# result_str = _config_builder(2, [0, 1], [2, 3], [0, 350, 0, 200, 350], [150, 400, 150, 300, 400])
 
-t = result_str.encode('utf-8')
+# t = result_str.encode('utf-8')
 
-print(t)
+# print(t)
 
 
 def impulse_builder(num_channels: int, channel_numbers: list[int], impulse_counts: list[int], start_times: list[int],
-                    stop_times: list[int], a, b, c):
-    # TODO добавить пояснение про a,b,c
+                    stop_times: list[int], repeat_time, pulse_scale, rep_scale):
     setPb(StrBuild(create_string_buffer(
-        _config_builder(num_channels, channel_numbers, impulse_counts, start_times, stop_times).encode("utf-8"))), a, b,
-          c)
+        _config_builder(num_channels, channel_numbers, impulse_counts, start_times, stop_times).encode("utf-8"))), repeat_time, pulse_scale,
+        rep_scale)
+
+
+impulse_builder(1, [0], [1], [0], [10], 10,1,1)
