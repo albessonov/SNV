@@ -1,12 +1,14 @@
 import struct
 import time
 from collections import deque
+from random import random
 
 import numpy as np
 import pyqtgraph as pg
 from PyQt6.QtCore import QThread, pyqtSignal
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout
 from fast_histogram import histogram1d
+from matplotlib import pyplot as plt
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
 from scapy.compat import raw
@@ -29,31 +31,48 @@ class CounterWorker(QThread):
         self.canvas = self.args[0]
         self.photon_data = self.args[1]
         self.x_data = np.linspace(0, self.window_size, self.window_size)
-        self.y_data = np.zeros(self.window_size)
-        self.line, = self.canvas.axes.plot(self.x_data, self.y_data, lw=2)
+        self.y_data_0 = np.zeros(self.window_size)
+        self.y_data_1 = np.zeros(self.window_size)
+        self.line_0, = self.canvas.axes.plot(self.x_data, self.y_data_0, lw=2, color="red", label="Канал 0")
+        self.line_1, = self.canvas.axes.plot(self.x_data, self.y_data_1, lw=2, color="blue", label="Канал 1")
+        self.canvas.axes.set_xticks([])
+        self.canvas.axes.set_title("Счёт фотонов")
         self.canvas.axes.set_xlabel('Время')
         self.canvas.axes.set_ylabel('Отсчеты')
+        self.canvas.axes.legend()
         self.canvas.axes.grid()
         self.is_killed = False
 
     def run(self):
         while not self.is_killed:
             try:
-                data_point = self.photon_data[-1]['cnt_photon_1']
+                data_point_0 = self.photon_data[-1]['cnt_photon_1']
+                data_point_1 = self.photon_data[-1]['cnt_photon_2']
                 print(self.photon_data[-1]['cnt_photon_2'])
             except Exception:
-                data_point = 0
-            time.sleep(1)
-            self.y_data = np.roll(self.y_data, -1)
-            self.y_data[-1] = data_point
+                data_point_0 = 0
+                data_point_1 = 0
 
-            max_data = np.max(self.y_data)
-            min_data = np.min(self.y_data)
+            self.y_data_0 = np.roll(self.y_data_0, -1)
+            self.y_data_1 = np.roll(self.y_data_1, -1)
+
+            self.y_data_0[-1] = data_point_0
+            self.y_data_1[-1] = data_point_1
+
+            max_data = min(np.max(self.y_data_0),np.max(self.y_data_1))
+            min_data = max(np.min(self.y_data_0),np.min(self.y_data_1))
+
             self.canvas.axes.set_xlim(0, 100)
             self.canvas.axes.set_ylim(min_data, max_data + 5)
-            self.line.set_ydata(self.y_data)
+
+            self.line_0.set_ydata(self.y_data_0)
+            self.line_0.set_ydata(self.y_data_1)
+
             self.canvas.draw()
             self.canvas.flush_events()
+
+            # FIXME Обновление каждые 100 мс, можно вынести потом в отдельную переменную
+            time.sleep(0.1)
 
         self.canvas.axes.clear()
         self.canvas.axes.cla()
@@ -122,7 +141,6 @@ class SniffThread(QThread):
                         "tp1_r": np.array(tp1_r),
                         "tp2_r": np.array(tp2_r)
                     }
-                    #print(result)
                     # Отправляем данные через сигнал
                     self.packet_signal.emit(result)
                 except Exception:
@@ -179,6 +197,7 @@ class SniffThread(QThread):
 class CorrelationTab(QWidget):
     def __init__(self, logger):
         super().__init__()
+        self.plot_thread = None
         self.logger = logger
         self.photon_data = deque(maxlen=10000)
         self.hist_data = None
@@ -209,12 +228,12 @@ class CorrelationTab(QWidget):
         self.sniff_thread.packet_signal.connect(self.packet_received)
         self.sniff_thread.start()
 
-        self.plot_thread = CounterWorker(self.canvas, self.photon_data)
-        self.plot_thread.start()
-
     def packet_received(self, packet):
         if not self.init and packet['flag']:
             # Инициализация при первом флаговом пакете
+            self.plot_thread = CounterWorker(self.canvas, self.photon_data)
+            self.plot_thread.start()
+            
             self.num_bins = int(np.round(self.tau_max_ns / self.bin_width_ns))
             self.bins = np.linspace(-self.tau_max_ns, self.tau_max_ns, self.num_bins + 1)
             self.hist_data = np.zeros(self.num_bins)
