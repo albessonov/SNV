@@ -1,13 +1,81 @@
 import struct
 import time
 from collections import deque
+from random import random
 
 import numpy as np
 import pyqtgraph as pg
 from PyQt6.QtCore import QThread, pyqtSignal
-from PyQt6.QtWidgets import QWidget, QVBoxLayout
+from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout
 from fast_histogram import histogram1d
+from matplotlib import pyplot as plt
+from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
+from matplotlib.figure import Figure
+from pyqtgraph.util.cprint import color
+from scapy.compat import raw
+from scapy.layers.l2 import Ether
+from scapy.sendrecv import sniff
 
+class MplCanvas(FigureCanvasQTAgg):
+
+    def __init__(self, parent=None, width=5, height=4, dpi=100):
+        fig = Figure(figsize=(width, height), dpi=dpi)
+        self.axes = fig.add_subplot(111)
+        super(MplCanvas, self).__init__(fig)
+
+class CounterWorker(QThread):
+    def __init__(self, *args):
+        super(CounterWorker, self).__init__()
+        self.args = args
+        self.interval = 0.1
+        self.window_size = 100
+        self.canvas = self.args[0]
+        self.photon_data = self.args[1]
+        self.x_data = np.linspace(0, self.window_size, self.window_size)
+        self.y_data_0 = np.zeros(self.window_size)
+        self.y_data_1 = np.zeros(self.window_size)
+        self.line_0, = self.canvas.axes.plot(self.x_data, self.y_data_0, lw=2, color="red", label="Канал 0")
+        self.line_1, = self.canvas.axes.plot(self.x_data, self.y_data_1, lw=2, color="blue", label="Канал 1")
+        self.canvas.axes.set_xticks([])
+        self.canvas.axes.set_title("Счёт фотонов")
+        self.canvas.axes.set_xlabel('Время')
+        self.canvas.axes.set_ylabel('Отсчеты')
+        self.canvas.axes.legend()
+        self.canvas.axes.grid()
+        self.is_killed = False
+
+    def run(self):
+        while not self.is_killed:
+            try:
+                data_point_0 = self.photon_data[-1]['cnt_photon_1']
+                data_point_1 = self.photon_data[-1]['cnt_photon_2']
+            except Exception:
+                data_point_0 = 0
+                data_point_1 = 0
+
+            self.y_data_0 = np.roll(self.y_data_0, -1)
+            self.y_data_1 = np.roll(self.y_data_1, -1)
+
+            self.y_data_0[-1] = data_point_0
+            self.y_data_1[-1] = data_point_1
+
+            max_data = max(np.max(self.y_data_0),np.max(self.y_data_1))
+            min_data = min(np.min(self.y_data_0),np.min(self.y_data_1))
+
+            self.canvas.axes.set_xlim(0, 100)
+            self.canvas.axes.set_ylim(min_data, max_data + 5)
+
+            self.line_0.set_ydata(self.y_data_0)
+            self.line_1.set_ydata(self.y_data_1)
+
+            self.canvas.draw()
+            self.canvas.flush_events()
+
+            # FIXME Обновление каждые 100 мс, можно вынести потом в отдельную переменную
+            time.sleep(0.1)
+
+        self.canvas.axes.clear()
+        self.canvas.axes.cla()
 
 class HistWorker(QThread):
     result_ready = pyqtSignal(np.ndarray)
@@ -20,7 +88,7 @@ class HistWorker(QThread):
         self.tau_max_ns = tau_max_ns
 
     def run(self):
-        deltas = np.hstack([t1[:, None] - t2 for t1, t2 in self.data])
+        deltas = np.concatenate([np.subtract.outer(t1, t2).ravel() for t1, t2 in self.data])
         valid = deltas[(deltas > -self.tau_max_ns) & (deltas < self.tau_max_ns)]
         hist = histogram1d(valid, bins=len(self.bins) - 1, range=(-self.tau_max_ns, self.tau_max_ns))
 
@@ -37,7 +105,50 @@ class SniffThread(QThread):
     def run(self):
         # Функция обратного вызова для обработки каждого пакета
         def packet_callback(packet):
-            if packet.haslayer("IP") and packet.haslayer("UDP"):
+            if packet.haslayer("Raw"):
+                payload = bytes(packet["Raw"].load)[28:]
+
+                # Защита от неверного размера
+                if len(payload) < 58:
+                    self.logger.log(f"Некорректный размер пакета", "Error", "packet_callback")
+                    return
+
+                try:
+                    # Распаковка данных
+                    package_id = struct.unpack('<H', payload[1:3])[0]
+                    byte6 = struct.unpack('<B', payload[5:6])[0]
+                    flag = (byte6 >> 7) & 1
+                    cnt_photon_1 = struct.unpack('<H', payload[6:8])[0]
+                    cnt_photon_2 = struct.unpack('<H', payload[8:10])[0]
+
+                    tp1 = [int.from_bytes(payload[10 + 4 * i:14 + 4 * i], byteorder="little") for i in range(0, 5 + 1)]
+                    tp1_a = [np.round((tp1[i] & 0x1F) * 0.18, 1) for i in range(len(tp1))]  # ns
+                    tp1_b = [np.round((tp1[i] >> 7) * 5, 1) for i in range(len(tp1))]  # ns
+                    tp1_r = [(tp1_a[i] + tp1_b[i]) for i in range(len(tp1_a))]  # ns
+
+                    tp2 = [int.from_bytes(payload[34 + 4 * i:38 + 4 * i], byteorder="little") for i in range(0, 5 + 1)]
+                    tp2_a = [np.round((tp2[i] & 0x1F) * 0.18, 1) for i in range(len(tp2))]  # ns
+                    tp2_b = [np.round((tp2[i] >> 7) * 5, 1) for i in range(len(tp2))]  # ns
+                    tp2_r = [(tp2_a[i] + tp2_b[i]) for i in range(len(tp2_a))]  # ns
+
+                    # Создаем словарь с результатами
+                    # FIXME Есть определённая избыточность в получаемых данных, стоит разделить на два метода: один чисто для счёта фотонов, другой для корелляции
+                    result = {
+                        "package_id": package_id,
+                        "flag": flag,
+                        "cnt_photon_1": cnt_photon_1,
+                        "cnt_photon_2": cnt_photon_2,
+                        "tp1_r": np.array(list(set(tp1_r))),
+                        "tp2_r": np.array(list(set(tp2_r)))
+                    }
+                    #print(len(np.array(list(set(tp1_r)))), len(np.array(list(set(tp1_r)))))
+                    # Отправляем данные через сигнал
+                    self.packet_signal.emit(result)
+                except Exception:
+                    self.logger.log(f"Неудачный парсинг пакета", "Error", "packet_callback")
+
+
+            elif packet.haslayer("IP") and packet.haslayer("UDP"):
                 payload = bytes(packet["UDP"].payload)
 
                 # Защита от неверного размера
@@ -52,17 +163,16 @@ class SniffThread(QThread):
                     flag = (byte6 >> 7) & 1
                     cnt_photon_1 = struct.unpack('<H', payload[6:8])[0]
                     cnt_photon_2 = struct.unpack('<H', payload[8:10])[0]
+
                     tp1 = [int.from_bytes(payload[10 + 4 * i:14 + 4 * i], byteorder="little") for i in range(0, 5 + 1)]
                     tp1_a = [np.round((tp1[i] & 0x1F) * 0.18, 1) for i in range(len(tp1))]  # ns
                     tp1_b = [np.round((tp1[i] >> 7) * 5, 1) for i in range(len(tp1))]  # ns
                     tp1_r = [(tp1_a[i] + tp1_b[i]) for i in range(len(tp1_a))]  # ns
-                    # print("a",tp1_r)
 
                     tp2 = [int.from_bytes(payload[34 + 4 * i:38 + 4 * i], byteorder="little") for i in range(0, 5 + 1)]
                     tp2_a = [np.round((tp2[i] & 0x1F) * 0.18, 1) for i in range(len(tp2))]  # ns
                     tp2_b = [np.round((tp2[i] >> 7) * 5, 1) for i in range(len(tp2))]  # ns
                     tp2_r = [(tp2_a[i] + tp2_b[i]) for i in range(len(tp2_a))]  # ns
-                    # print("b", tp2_r)
 
                     # Создаем словарь с результатами
                     # FIXME Есть определённая избыточность в получаемых данных, стоит разделить на два метода: один чисто для счёта фотонов, другой для корелляции
@@ -80,13 +190,7 @@ class SniffThread(QThread):
                     self.logger.log(f"Неудачный парсинг пакета", "Error", "packet_callback")
 
         try:
-            # sniff(iface="Ethernet", filter="udp and src host 192.168.1.2", prn=packet_callback, count=0)
-            while 1:
-                self.packet_signal.emit({
-                    "flag": True,
-                    "tp1_r": np.array([56519680.6, 56520984.3]),
-                    "tp2_r": np.array([56518606.1, 56520973.2])})
-                time.sleep(0.1)
+             sniff(iface="Ethernet", filter="src host 192.168.1.2", prn=packet_callback, count=0)
         except Exception as e:
             self.logger.log(f"{e}", "Error", "SniffThread")
 
@@ -94,6 +198,7 @@ class SniffThread(QThread):
 class CorrelationTab(QWidget):
     def __init__(self, logger):
         super().__init__()
+        self.plot_thread = None
         self.logger = logger
         self.photon_data = deque(maxlen=10000)
         self.hist_data = None
@@ -104,13 +209,20 @@ class CorrelationTab(QWidget):
         self.init = False
 
         layout = QVBoxLayout()
+
+        plots_layout = QHBoxLayout()
+        self.canvas = MplCanvas(self, width=5, height=4, dpi=90)
+
         self.plot_widget = pg.PlotWidget()
         self.plot_widget.setTitle("g2", size="13pt")
         self.plot_widget.setLabel("left", "Счёты", size="13pt")
         self.plot_widget.setLabel("bottom", "Время [нс]", size="13pt")
         self.plot_widget.showGrid(x=True, y=True)
 
-        layout.addWidget(self.plot_widget)
+        plots_layout.addWidget(self.canvas)
+        plots_layout.addWidget(self.plot_widget)
+
+        layout.addLayout(plots_layout)
         self.setLayout(layout)
 
         self.sniff_thread = SniffThread(self.logger)
@@ -120,6 +232,9 @@ class CorrelationTab(QWidget):
     def packet_received(self, packet):
         if not self.init and packet['flag']:
             # Инициализация при первом флаговом пакете
+            self.plot_thread = CounterWorker(self.canvas, self.photon_data)
+            self.plot_thread.start()
+            
             self.num_bins = int(np.round(self.tau_max_ns / self.bin_width_ns))
             self.bins = np.linspace(-self.tau_max_ns, self.tau_max_ns, self.num_bins + 1)
             self.hist_data = np.zeros(self.num_bins)
@@ -135,14 +250,10 @@ class CorrelationTab(QWidget):
         all_t1 = [d["tp1_r"] for d in self.photon_data]
         all_t2 = [d["tp2_r"] for d in self.photon_data]
 
-        # Фильтрация данных
-        filtered_t1 = [t[(t > 0)] for t in all_t1]
-        filtered_t2 = [t[(t > 0)] for t in all_t2]
-
         # Запуск расчета гистограммы
         self.hist_worker = HistWorker(
             self.logger,
-            list(zip(filtered_t1, filtered_t2)),
+            list(zip(all_t1, all_t2)),
             self.bins,
             self.tau_max_ns
         )

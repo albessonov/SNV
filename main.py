@@ -20,7 +20,7 @@ class MainWindow(QMainWindow):
 
         tabs = QTabWidget()
         correlation_tab = CorrelationTab(self.logger)
-        tabs.addTab(correlation_tab, "Картирование")
+        tabs.addTab(correlation_tab, "Корреляция")
 
         layout.addWidget(tabs)
         layout.addWidget(self.logger)
