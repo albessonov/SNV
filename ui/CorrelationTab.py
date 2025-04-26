@@ -11,6 +11,7 @@ from fast_histogram import histogram1d
 from matplotlib import pyplot as plt
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
+from pyqtgraph.util.cprint import color
 from scapy.compat import raw
 from scapy.layers.l2 import Ether
 from scapy.sendrecv import sniff
@@ -48,7 +49,6 @@ class CounterWorker(QThread):
             try:
                 data_point_0 = self.photon_data[-1]['cnt_photon_1']
                 data_point_1 = self.photon_data[-1]['cnt_photon_2']
-                print(self.photon_data[-1]['cnt_photon_2'])
             except Exception:
                 data_point_0 = 0
                 data_point_1 = 0
@@ -59,14 +59,14 @@ class CounterWorker(QThread):
             self.y_data_0[-1] = data_point_0
             self.y_data_1[-1] = data_point_1
 
-            max_data = min(np.max(self.y_data_0),np.max(self.y_data_1))
-            min_data = max(np.min(self.y_data_0),np.min(self.y_data_1))
+            max_data = max(np.max(self.y_data_0),np.max(self.y_data_1))
+            min_data = min(np.min(self.y_data_0),np.min(self.y_data_1))
 
             self.canvas.axes.set_xlim(0, 100)
             self.canvas.axes.set_ylim(min_data, max_data + 5)
 
             self.line_0.set_ydata(self.y_data_0)
-            self.line_0.set_ydata(self.y_data_1)
+            self.line_1.set_ydata(self.y_data_1)
 
             self.canvas.draw()
             self.canvas.flush_events()
@@ -88,7 +88,7 @@ class HistWorker(QThread):
         self.tau_max_ns = tau_max_ns
 
     def run(self):
-        deltas = np.hstack([t1[:, None] - t2 for t1, t2 in self.data])
+        deltas = np.concatenate([np.subtract.outer(t1, t2).ravel() for t1, t2 in self.data])
         valid = deltas[(deltas > -self.tau_max_ns) & (deltas < self.tau_max_ns)]
         hist = histogram1d(valid, bins=len(self.bins) - 1, range=(-self.tau_max_ns, self.tau_max_ns))
 
@@ -138,9 +138,10 @@ class SniffThread(QThread):
                         "flag": flag,
                         "cnt_photon_1": cnt_photon_1,
                         "cnt_photon_2": cnt_photon_2,
-                        "tp1_r": np.array(tp1_r),
-                        "tp2_r": np.array(tp2_r)
+                        "tp1_r": np.array(list(set(tp1_r))),
+                        "tp2_r": np.array(list(set(tp2_r)))
                     }
+                    #print(len(np.array(list(set(tp1_r)))), len(np.array(list(set(tp1_r)))))
                     # Отправляем данные через сигнал
                     self.packet_signal.emit(result)
                 except Exception:
@@ -203,7 +204,7 @@ class CorrelationTab(QWidget):
         self.hist_data = None
         self.bins = None
         self.tau_max_ns = 100
-        self.bin_width_ns = 0.001
+        self.bin_width_ns = 0.1
         self.num_bins = None
         self.init = False
 
@@ -213,6 +214,7 @@ class CorrelationTab(QWidget):
         self.canvas = MplCanvas(self, width=5, height=4, dpi=90)
 
         self.plot_widget = pg.PlotWidget()
+        self.pen = pg.mkPen(color(255,0,0))
         self.plot_widget.setTitle("g2", size="13pt")
         self.plot_widget.setLabel("left", "Счёты", size="13pt")
         self.plot_widget.setLabel("bottom", "Время [нс]", size="13pt")
@@ -273,7 +275,8 @@ class CorrelationTab(QWidget):
                 self.bins,
                 self.hist_data,
                 stepMode=True,
-                fillLevel=0)
+                fillLevel=0,
+            pen=self.pen)
 
         except Exception as e:
             self.logger.log(f"Ошибка обновления графика: {str(e)}", "Error", "update_plot")
