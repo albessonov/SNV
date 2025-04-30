@@ -1,20 +1,15 @@
 import struct
 import time
 from collections import deque
-from random import random
 
 import numpy as np
 import pyqtgraph as pg
 from PyQt6.QtCore import QThread, pyqtSignal
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout
 from fast_histogram import histogram1d
-from matplotlib import pyplot as plt
 from matplotlib.backends.backend_qt import NavigationToolbar2QT
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
-from pyqtgraph.util.cprint import color
-from scapy.compat import raw
-from scapy.layers.l2 import Ether
 from scapy.sendrecv import sniff
 
 class MplCanvas(FigureCanvasQTAgg):
@@ -161,7 +156,7 @@ class SniffThread(QThread):
                         # Отправляем данные через сигнал
                         self.packet_signal.emit(result)
                         if flag_neg == 1 or flag_pos == 1:
-                            print(result)
+                            print(f"Counts {count_pos}   ({count_neg})")
                 except Exception:
                     self.logger.log(f"Неудачный парсинг пакета", "Error", "packet_callback")
 
@@ -209,7 +204,7 @@ class CorrelationTab(QWidget):
 
         self.sniff_thread = SniffThread(self.logger)
         self.sniff_thread.packet_signal.connect(self.packet_received)
-        self.sniff_thread.start()
+        #self.sniff_thread.start()
 
     def packet_received(self, packet):
         if not self.init and packet['flag']:

@@ -5,6 +5,7 @@ from QtLogger import QtLogger
 
 from ui.CorrelationTab import CorrelationTab
 from ui.MappingTab import MappingTab
+from ui.ODMRTab import ODMRTab
 
 
 class MainWindow(QMainWindow):
@@ -22,9 +23,11 @@ class MainWindow(QMainWindow):
         tabs = QTabWidget()
         correlation_tab = CorrelationTab(self.logger)
         mapping_tab = MappingTab(self.logger)
+        odmr_tab = ODMRTab(self.logger)
 
         tabs.addTab(correlation_tab, "Корреляция")
         tabs.addTab(mapping_tab, "Картирование")
+        tabs.addTab(odmr_tab, "ОДМР")
 
         layout.addWidget(tabs)
         layout.addWidget(self.logger)

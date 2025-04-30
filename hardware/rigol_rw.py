@@ -12,6 +12,7 @@ RES = "USB0::0x1AB1::0x099C::DSG3G264300050::INSTR"
 
 def packet_callback(packet):
     if packet.haslayer("Raw"):
+        print(len(packet["Raw"].load))
         payload = bytes(packet["Raw"].load)[28:]
 
         # Защита от неверного размера
@@ -42,7 +43,10 @@ def packet_callback(packet):
             tp2_b = [np.round((tp2[i] >> 7) * 5, 1) for i in range(len(tp2))]  # ns
             tp2_r = [(tp2_a[i] + tp2_b[i]) for i in range(len(tp2_a))]  # ns
 
+            #print(len(payload),payload[-4:-1])
+
             count_pos = int.from_bytes(payload[58:59], byteorder="little")
+
             count_neg = int.from_bytes(payload[60:61], byteorder="little")
 
             # Создаем словарь с результатами
@@ -64,7 +68,8 @@ def packet_callback(packet):
             if flag_valid == 1:
                 # Отправляем данные через сигнал
                 if flag_neg == 1 or flag_pos == 1:
-                    print(result)
+                    pass
+                    #print(f"Count: {count_pos}")
         except Exception:
             pass
 
@@ -82,7 +87,6 @@ def setup(gain: int, start_freq: float, stop_freq: float, step_freq: float):
 
         points_number = np.round((stop_freq - start_freq) / step_freq, 0) + 1
 
-        print(points_number)
 
         dev.write(f':LEV {gain}dBm')
 
@@ -104,10 +108,9 @@ def setup(gain: int, start_freq: float, stop_freq: float, step_freq: float):
         raise ValueError("Превышен диапазон")
 
 
-setup(2, 1 * 1E9, 3 * 1E9, 50*1E3)
+setup(-20, 2.83 * 1E9, 2.9 * 1E9, 500*1E3)
 # Триггер
-print("Ого. 10 секунд осталось")
-time.sleep(10)
+input("enter")
 print("Поехали !")
-impulse_builder(2, [0, 1], [1, 1], [0, 10], [10, 20], 10,1E6,1)
+impulse_builder(2, [0, 1], [1, 1], [0, 10], [10, 20], 10, 1000000, 1)
 sniff(iface="Ethernet", filter="src host 192.168.1.2", prn=packet_callback, count=0)
