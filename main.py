@@ -4,6 +4,7 @@ from PyQt6.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QWidget, QTa
 from QtLogger import QtLogger
 
 from ui.CorrelationTab import CorrelationTab
+from ui.MappingTab import MappingTab
 
 
 class MainWindow(QMainWindow):
@@ -20,7 +21,10 @@ class MainWindow(QMainWindow):
 
         tabs = QTabWidget()
         correlation_tab = CorrelationTab(self.logger)
+        mapping_tab = MappingTab(self.logger)
+
         tabs.addTab(correlation_tab, "Корреляция")
+        tabs.addTab(mapping_tab, "Картирование")
 
         layout.addWidget(tabs)
         layout.addWidget(self.logger)

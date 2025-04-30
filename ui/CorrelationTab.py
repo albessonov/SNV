@@ -9,11 +9,13 @@ from PyQt6.QtCore import QThread, pyqtSignal
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout
 from fast_histogram import histogram1d
 from matplotlib import pyplot as plt
+from matplotlib.backends.backend_qt import NavigationToolbar2QT
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
 from pyqtgraph.util.cprint import color
 from scapy.compat import raw
 from scapy.layers.l2 import Ether
+import plotly.express as px
 from scapy.sendrecv import sniff
 
 class MplCanvas(FigureCanvasQTAgg):
@@ -21,6 +23,7 @@ class MplCanvas(FigureCanvasQTAgg):
     def __init__(self, parent=None, width=5, height=4, dpi=100):
         fig = Figure(figsize=(width, height), dpi=dpi)
         self.axes = fig.add_subplot(111)
+        fig.tight_layout(pad=0.6)
         super(MplCanvas, self).__init__(fig)
 
 class CounterWorker(QThread):
@@ -40,7 +43,7 @@ class CounterWorker(QThread):
         self.canvas.axes.set_title("Счёт фотонов")
         self.canvas.axes.set_xlabel('Время')
         self.canvas.axes.set_ylabel('Отсчеты')
-        self.canvas.axes.legend()
+        self.canvas.axes.legend(loc="upper right")
         self.canvas.axes.grid()
         self.is_killed = False
 
@@ -210,25 +213,30 @@ class CorrelationTab(QWidget):
 
         layout = QVBoxLayout()
 
-        plots_layout = QHBoxLayout()
+        main_layout = QHBoxLayout()
+
         self.canvas = MplCanvas(self, width=5, height=4, dpi=90)
 
         self.plot_widget = pg.PlotWidget()
-        self.pen = pg.mkPen(color(255,0,0))
         self.plot_widget.setTitle("g2", size="13pt")
         self.plot_widget.setLabel("left", "Счёты", size="13pt")
         self.plot_widget.setLabel("bottom", "Время [нс]", size="13pt")
         self.plot_widget.showGrid(x=True, y=True)
 
-        plots_layout.addWidget(self.canvas)
-        plots_layout.addWidget(self.plot_widget)
+        counter_layout = QVBoxLayout()
+        toolbar = NavigationToolbar2QT(self.canvas, self)
+        counter_layout.addWidget(toolbar)
+        counter_layout.addWidget(self.canvas)
 
-        layout.addLayout(plots_layout)
+        main_layout.addLayout(counter_layout, stretch=1)
+        main_layout.addWidget(self.plot_widget, stretch=1)
+
+        layout.addLayout(main_layout)
         self.setLayout(layout)
 
         self.sniff_thread = SniffThread(self.logger)
         self.sniff_thread.packet_signal.connect(self.packet_received)
-        self.sniff_thread.start()
+        #self.sniff_thread.start()
 
     def packet_received(self, packet):
         if not self.init and packet['flag']:
@@ -275,8 +283,7 @@ class CorrelationTab(QWidget):
                 self.bins,
                 self.hist_data,
                 stepMode=True,
-                fillLevel=0,
-            pen=self.pen)
+                fillLevel=0)
 
         except Exception as e:
             self.logger.log(f"Ошибка обновления графика: {str(e)}", "Error", "update_plot")
