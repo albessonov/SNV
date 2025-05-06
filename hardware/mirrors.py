@@ -9,13 +9,13 @@ VOLTAGE_TO_LENGTH_X = 32.13 / 1.340
 VOLTAGE_TO_LENGTH_Y = 31.46 / 0.940
 
 
-def open_serial_port():
+def open_serial_port(logger):
     try:
         serial_device = serial.Serial('COM9', 115200, timeout=0.01)
         if not serial_device.isOpen():
             serial_device.open()
     except serial.SerialException:
-        raise IOError('Не получилось открыть serial port зеркал')
+        logger.log("Не удалось открыть порт зеркал", "Error", "open_serial_port")
     else:
         return serial_device
 
@@ -53,7 +53,7 @@ def voltage_to_length(voltage: float, axis: str) -> float:
         return VOLTAGE_TO_LENGTH_Y * voltage
 
 
-def move_command(serial_device: Serial, voltage_position: [str, str]):
+def move_command(serial_device: Serial, voltage_position: [str, str], logger):
     """
     Отправляет команду на установку зеркал
     :param serial_device: зеркала
@@ -66,10 +66,10 @@ def move_command(serial_device: Serial, voltage_position: [str, str]):
         y = format(y, '.3f')
         serial_device.write(f"{x}|{y}F".encode())
     else:
-        raise ValueError("Запрещённый диапазон напряжения")
+        logger.log("Запрещённый диапазон напряжения", "Error", "move_command")
 
 
-def move_to_position(serial_device: Serial, center: [float, float], position: [float, float]):
+def move_to_position(serial_device: Serial, center: [float, float], position: [float, float], logger):
     """
     Перемещает зеркала в необходимую точку на плоскости
     :param serial_device: зеркала
@@ -88,7 +88,7 @@ def move_to_position(serial_device: Serial, center: [float, float], position: [f
         y_center_voltage = 1.650 + length_to_voltage(abs(center[1]), 'y')
 
     if not (0 <= x_center_voltage <= 3.3 and 0 <= y_center_voltage <= 3.3):
-        raise ValueError("Запрещённое значение напряжения для центра СК")
+        logger.log("Запрещённое значение напряжения для центра СК", "Error", "move_to_position")
 
     x_voltage, y_voltage = None, None
     if position[0] >= center[0]:
@@ -102,9 +102,9 @@ def move_to_position(serial_device: Serial, center: [float, float], position: [f
         y_voltage = format(y_center_voltage + length_to_voltage(abs(position[1]), 'y'), '.3f')
 
     if not (0 <= float(x_voltage) <= 3.3 and 0 <= float(y_voltage) <= 3.3):
-        raise ValueError("Запрещённое значение напряжения для точки установки зеркал")
+        logger.log("Запрещённое значение напряжения для точки установки зеркал", "Error", "move_to_position")
 
-    move_command(serial_device, [x_voltage, y_voltage])
+    move_command(serial_device, [x_voltage, y_voltage], logger)
 
 
 def _calculate_length(voltage: float, axis: str) -> float:
@@ -120,29 +120,32 @@ def _calculate_length(voltage: float, axis: str) -> float:
         return 0 + length_to_voltage(voltage, axis)
 
 
-def get_position(serial_device: Serial) -> [float, float]:
+def get_position(serial_device: Serial, logger) -> [float, float]:
     """
 
     :param serial_device: зеркала
     :return: [float, float] текущая позиция зеркал в длинах
     """
-    serial_device.write(f"GETVOLTAGEFF".encode())
-    time.sleep(0.1)
-    data = serial_device.readline()
+    try:
+        serial_device.write(f"GETVOLTAGEFF".encode())
+        time.sleep(0.1)
+        data = serial_device.readline()
 
-    if len(data) > 5:
-        x_str, y_str = data.decode().split('|')
+        if len(data) > 5:
+            x_str, y_str = data.decode().split('|')
 
-        if len(x_str) == len(y_str) == 5 and 0 <= float(x_str) <= 3.3 and 0 <= float(y_str) <= 3.3:
-            x, y = float(x_str), float(y_str)
+            if len(x_str) == len(y_str) == 5 and 0 <= float(x_str) <= 3.3 and 0 <= float(y_str) <= 3.3:
+                x, y = float(x_str), float(y_str)
 
-            x_length = _calculate_length(x, 'x')
-            y_length = _calculate_length(y, 'y')
+                x_length = _calculate_length(x, 'x')
+                y_length = _calculate_length(y, 'y')
 
-            return [x_length, y_length]
+                return [x_length, y_length]
+            else:
+                logger.log("Данные позиции повреждены", "Error", "get_position")
+                pass
         else:
-            # TODO сюда логгер с инфо о проблеме
+            logger.log("Данные позиции повреждены", "Error", "get_position")
             pass
-    else:
-        # TODO сюда логгер с инфо о проблеме
-        pass
+    except Exception as e:
+        logger.log(f"Неизвестная ошибка: {e}", "Error", "get_position")

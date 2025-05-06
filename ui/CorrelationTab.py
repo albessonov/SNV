@@ -5,7 +5,7 @@ from collections import deque
 import numpy as np
 import pyqtgraph as pg
 from PyQt6.QtCore import QThread, pyqtSignal
-from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout
+from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QFileDialog
 from fast_histogram import histogram1d
 from matplotlib.backends.backend_qt import NavigationToolbar2QT
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
@@ -160,10 +160,11 @@ class SniffThread(QThread):
                 except Exception:
                     self.logger.log(f"Неудачный парсинг пакета", "Error", "packet_callback")
 
-        try:
-             sniff(iface="Ethernet", filter="src host 192.168.1.2", prn=packet_callback, count=0)
-        except Exception as e:
-            self.logger.log(f"{e}", "Error", "SniffThread")
+        while not self.isInterruptionRequested():
+            try:
+                 sniff(iface="Ethernet", filter="src host 192.168.1.2", prn=packet_callback, count=0)
+            except Exception as e:
+                self.logger.log(f"{e}", "Error", "SniffThread")
 
 
 class CorrelationTab(QWidget):
@@ -199,12 +200,26 @@ class CorrelationTab(QWidget):
         main_layout.addLayout(counter_layout, stretch=1)
         main_layout.addWidget(self.plot_widget, stretch=1)
 
+        control_layout = QHBoxLayout()
+        self.control_button = QPushButton("Старт")
+        self.control_button.clicked.connect(self.control_button_clicked)
+
+        self.save_button = QPushButton("Сохранить гистограмму")
+        self.save_button.clicked.connect(self.save_histogram)
+        self.load_button = QPushButton("Загрузить гистограмму")
+        self.load_button.clicked.connect(self.load_histogram)
+
+        control_layout.addWidget(self.control_button)
+        control_layout.addWidget(self.save_button)
+        control_layout.addWidget(self.load_button)
+
         layout.addLayout(main_layout)
+        layout.addLayout(control_layout)
+
         self.setLayout(layout)
 
         self.sniff_thread = SniffThread(self.logger)
         self.sniff_thread.packet_signal.connect(self.packet_received)
-        #self.sniff_thread.start()
 
     def packet_received(self, packet):
         if not self.init and packet['flag']:
@@ -255,6 +270,129 @@ class CorrelationTab(QWidget):
 
         except Exception as e:
             self.logger.log(f"Ошибка обновления графика: {str(e)}", "Error", "update_plot")
+
+    def control_button_clicked(self):
+        if not self.sniff_thread.isRunning():
+            self.sniff_thread.start()
+            self.control_button.setText("Стоп")
+        else:
+            self.sniff_thread.requestInterruption()
+            self.sniff_thread.quit()
+            self.sniff_thread.wait()
+            self.control_button.setText("Старт")
+
+    def save_histogram(self):
+        """Сохраняет гистограмму в файл"""
+        if self.hist_data is None or len(self.hist_data) == 0:
+            self.logger.log("Нет данных гистограммы для сохранения", "Warning", "save_histogram")
+            return
+
+        filename, _ = QFileDialog.getSaveFileName(
+            self,
+            "Сохранить гистограмму",
+            "",
+            "CSV Files (*.csv);;NPZ Files (*.npz);;All Files (*)"
+        )
+
+        if not filename:
+            return
+
+        try:
+            if filename.endswith('.csv'):
+                # Сохранение в CSV
+                import csv
+                with open(filename, 'w', newline='') as f:
+                    writer = csv.writer(f)
+                    writer.writerow(['Time (ns)', 'Counts'])
+                    for time, count in zip(self.bins[:-1], self.hist_data):
+                        writer.writerow([time, count])
+            elif filename.endswith('.npz'):
+                # Сохранение в бинарном формате NumPy
+                np.savez(
+                    filename,
+                    bins=self.bins,
+                    hist_data=self.hist_data,
+                    tau_max_ns=self.tau_max_ns,
+                    bin_width_ns=self.bin_width_ns
+                )
+            else:
+                # Сохранение в текстовом формате
+                with open(filename, 'w') as f:
+                    f.write(f"tau_max_ns: {self.tau_max_ns}\n")
+                    f.write(f"bin_width_ns: {self.bin_width_ns}\n")
+                    f.write("Time(ns),Counts\n")
+                    for time, count in zip(self.bins[:-1], self.hist_data):
+                        f.write(f"{time},{count}\n")
+
+            self.logger.log(f"Гистограмма сохранена в {filename}", "Info", "save_histogram")
+
+        except Exception as e:
+            self.logger.log(f"Ошибка при сохранении: {str(e)}", "Error", "save_histogram")
+
+    def load_histogram(self):
+        """Загружает гистограмму из файла"""
+        filename, _ = QFileDialog.getOpenFileName(
+            self,
+            "Загрузить гистограмму",
+            "",
+            "CSV Files (*.csv);;NPZ Files (*.npz);;Text Files (*.txt);;All Files (*)"
+        )
+
+        if not filename:
+            return
+
+        try:
+            if filename.endswith('.npz'):
+                # Загрузка из бинарного формата NumPy
+                data = np.load(filename)
+                self.bins = data['bins']
+                self.hist_data = data['hist_data']
+                self.tau_max_ns = float(data['tau_max_ns'])
+                self.bin_width_ns = float(data['bin_width_ns'])
+            else:
+                # Загрузка из текстового/CSV формата
+                if filename.endswith('.csv'):
+                    import csv
+                    with open(filename, 'r') as f:
+                        reader = csv.reader(f)
+                        next(reader)  # Пропускаем заголовок
+                        data = list(reader)
+                else:
+                    with open(filename, 'r') as f:
+                        lines = f.readlines()[2:]  # Пропускаем первые две строки с параметрами
+                        data = [line.strip().split(',') for line in lines]
+
+                # Преобразуем данные в массивы
+                times = []
+                counts = []
+                for row in data:
+                    if len(row) >= 2:
+                        times.append(float(row[0]))
+                        counts.append(float(row[1]))
+
+                self.hist_data = np.array(counts)
+                self.bins = np.linspace(
+                    min(times),
+                    max(times) + (times[1] - times[0]),
+                    len(times) + 1
+                )
+                self.tau_max_ns = max(abs(min(times)), abs(max(times)))
+                self.bin_width_ns = times[1] - times[0]
+
+            # Обновляем график
+            self.plot_widget.clear()
+            self.plot_widget.plot(
+                self.bins,
+                self.hist_data,
+                stepMode=True,
+                fillLevel=0,
+                pen='r'
+            )
+
+            self.logger.log(f"Гистограмма загружена из {filename}", "Info", "load_histogram")
+
+        except Exception as e:
+            self.logger.log(f"Ошибка при загрузке: {str(e)}", "Error", "load_histogram")
 
     def closeEvent(self, event):
         self.sniff_thread.terminate()

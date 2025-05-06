@@ -1,17 +1,18 @@
 import struct
 
 import numpy as np
-from PyQt6.QtCore import pyqtSignal, QThread
-from PyQt6.QtWidgets import QVBoxLayout, QWidget
+from PyQt6.QtCore import pyqtSignal, QThread, QMutex
+from PyQt6.QtGui import QIntValidator, QDoubleValidator
+from PyQt6.QtWidgets import QVBoxLayout, QWidget, QProgressBar, QHBoxLayout, QPushButton, QGridLayout, QLabel, \
+    QLineEdit, QFileDialog, QMessageBox, QSpinBox, QCheckBox
 from matplotlib.backends.backend_qt import NavigationToolbar2QT
 from numpy import arange
 from pyvisa import ResourceManager
 from scapy.sendrecv import sniff
 
-from hardware.spincore import impulse_builder
+from hardware.rigol_rw import setup
+#from hardware.spincore import impulse_builder
 from ui.CorrelationTab import MplCanvas
-
-RES = "USB0::0x1AB1::0x099C::DSG3G264300050::INSTR"
 
 
 class SniffThread(QThread):
@@ -20,32 +21,28 @@ class SniffThread(QThread):
     def __init__(self, logger):
         super().__init__()
         self.logger = logger
+        self.running = True
 
     def run(self):
-        # Функция обратного вызова для обработки каждого пакета
         def packet_callback(packet):
+            if not self.running:
+                return
+
             if packet.haslayer("Raw"):
                 payload = bytes(packet["Raw"].load)[28:]
 
-                # Защита от неверного размера
                 if len(payload) < 58:
                     return
 
                 try:
                     package_id = struct.unpack('<H', payload[1:3])[0]
-
-                    # Распаковка данных
                     byte6 = struct.unpack('<B', payload[5:6])[0]
-
                     flag_valid = byte6 & 0x1
-
                     flag_pos = (byte6 & 0x10) >> 4
                     flag_neg = (byte6 & 0x8) >> 3
-
                     count_pos = int.from_bytes(payload[58:59], byteorder="little")
                     count_neg = int.from_bytes(payload[60:61], byteorder="little")
 
-                    # Создаем словарь с результатами
                     result = {
                         "package_id": package_id,
                         "flag_valid": flag_valid,
@@ -53,114 +50,437 @@ class SniffThread(QThread):
                         "flag_pos": flag_pos,
                         "count_neg": count_neg,
                         "count_pos": count_pos
-
                     }
-                    print(result['flag_valid'])
-                    if flag_valid == 1:
-                        # Отправляем данные через сигнал
-                        if flag_pos == 1:
-                            #print(payload[58:59])
-                            self.packet_signal.emit(result)
-                except Exception:
-                    pass
+
+                    if flag_valid == 1 and (flag_pos == 1 or flag_neg == 1):
+                        self.packet_signal.emit(result)
+                except Exception as e:
+                    self.logger.log(f"Packet processing error: {e}", "Error", "SniffThread")
 
         try:
             sniff(iface="Ethernet", filter="src host 192.168.1.2", prn=packet_callback, count=0)
         except Exception as e:
             self.logger.log(f"{e}", "Error", "SniffThread")
 
-class AveragingThread(QThread):
-    pass
+    def stop(self):
+        self.running = False
+        self.quit()
 
 
+class DataProcessingThread(QThread):
+    data_updated = pyqtSignal(np.ndarray, np.ndarray, int)
 
-class CanvasThread(QThread):
-    def __init__(self, *args):
-        super(CanvasThread, self).__init__()
-        self.logger = args[0]
-        self.canvas = args[1]
-        self.freq = args[2]
-        self.ph = args[3]
+    def __init__(self, num_points, num_averages, logger):
+        super().__init__()
+        self.num_points = num_points
+        self.num_averages = num_averages
+        self.logger = logger
+        self.mutex = QMutex()
+        self.data = []
+        self.current_sweep = 0
+        self.running = True
 
-    def run(self):
-        self.canvas.axes.plot(self.freq, self.ph[-1])
-        self.canvas.axes.set_xlabel('Частота')
-        self.canvas.axes.set_ylabel('Фотоны')
-        self.canvas.draw()
-        self.canvas.flush_events()
+        # Initialize data arrays
+        self.reset_data()
 
+    def reset_data(self):
+        self.mutex.lock()
+        self.data = [{
+            'count_pos': np.zeros(self.num_points),
+            'count_neg': np.zeros(self.num_points),
+            'num_samples': np.zeros(self.num_points)
+        } for _ in range(self.num_averages)]
+        self.current_sweep = 0
+        self.mutex.unlock()
 
-def setup(gain: int, start_freq: float, stop_freq: float, step_freq: float):
-    """
-    Args:
-        gain: усиление, [дБм]
-        start_freq: начальная частота, [Гц]
-        stop_freq: конечная частота, [Гц]
-        step_freq: шаг частоты, [Гц]
-    """
-    if 9 * 1E3 <= start_freq <= 13.6 * 1E9 and 9 * 1E3 <= stop_freq <= 13.6 * 1E9:
-        rm = ResourceManager()
-        dev = rm.open_resource(RES)
+    def add_data_point(self, index, count_pos, count_neg):
+        self.mutex.lock()
+        try:
+            avg_idx = self.current_sweep % self.num_averages
+            self.data[avg_idx]['count_pos'][index] += count_pos
+            self.data[avg_idx]['count_neg'][index] += count_neg
+            self.data[avg_idx]['num_samples'][index] += 1
 
-        points_number = np.round((stop_freq - start_freq) / step_freq, 0) + 1
+            # Calculate averaged data
+            total_pos = np.zeros(self.num_points)
+            total_neg = np.zeros(self.num_points)
+            total_samples = np.zeros(self.num_points)
 
-        dev.write(f':LEV {gain}dBm')
+            for d in self.data:
+                total_pos += d['count_pos']
+                total_neg += d['count_neg']
+                total_samples += d['num_samples']
 
-        dev.write(':SOUR1:FUNC:MODE SWE')
-        dev.write(":SWE:MODE CONT")
-        dev.write(":SWE:STEP:SHAP RAMP")
-        dev.write(":SWE:TYPE STEP")
+            # Avoid division by zero
+            valid_samples = total_samples > 0
+            ratio = np.zeros(self.num_points)
+            ratio[valid_samples] = total_pos[valid_samples] / (total_pos[valid_samples] + total_neg[valid_samples])
 
-        dev.write(f":SWE:STEP:POIN {points_number}")
-        dev.write(f":SWE:STEP:STAR:FREQ {start_freq}")
-        dev.write(f":SWE:STEP:STOP:FREQ {stop_freq}")
+            self.data_updated.emit(ratio, valid_samples, self.current_sweep)
 
-        dev.write("SWE:POIN:TRIG:TYPE EXT")
+        except Exception as e:
+            self.logger.log(f"Data processing error: {e}", "Error", "DataProcessingThread")
+        finally:
+            self.mutex.unlock()
 
-        dev.write(":OUTP 1")
+    def increment_sweep(self):
+        self.mutex.lock()
+        self.current_sweep += 1
+        self.mutex.unlock()
 
-        dev.close()
-    else:
-        raise ValueError("Превышен диапазон")
+    def stop(self):
+        self.running = False
+        self.quit()
 
 
 class ODMRTab(QWidget):
     def __init__(self, logger):
         super().__init__()
         self.logger = logger
-        self.freq = arange(start=2.83 * 1E9, stop=2.9 * 1E9 + 1, step=500 * 1E3)
-        self.resq = []
-        self.tem = []
+        self.frequencies = np.array([])
+        self.measurement_running = False
+        self.sniff_thread = None
+        self.data_thread = None
+        self.current_point = 0
+        self.num_points = 0
+        self.impulse_config = None
 
-        # Основной вертикальный layout
+        self.init_ui()
+
+    def init_ui(self):
         main_layout = QVBoxLayout(self)
 
-        # Виджеты для графика
+        # Progress bar
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setFormat("%p% | ?/?")
+        self.progress_bar.setValue(0)
+
+        # Control buttons
+        control_layout = QHBoxLayout()
+        self.measurement_button = QPushButton('Старт')
+        self.measurement_button.clicked.connect(self.toggle_measurement)
+        self.load_impulse_button = QPushButton('Загрузить конфигурацию импульсов')
+        self.load_impulse_button.clicked.connect(self.load_impulse_config)
+
+        control_layout.addWidget(self.measurement_button)
+        control_layout.addWidget(self.load_impulse_button)
+
+        # Frequency parameters
+        params_layout = QGridLayout()
+
+        labels = [
+            "Начальная частота, MГц", "Шаг частоты, Гц",
+            "Выходная мощность, дБм", "Конечная частота, MГц",
+            "Количество усреднений"
+        ]
+
+        self.frequency_start_edit = QLineEdit()
+        self.frequency_step_edit = QLineEdit()
+        self.output_power_edit = QLineEdit()
+        self.frequency_stop_edit = QLineEdit()
+        self.averages_spin = QSpinBox()
+        self.averages_spin.setRange(1, 1000)
+        self.averages_spin.setValue(1)
+
+        self.realtime_check = QCheckBox("Обновлять график в реальном времени")
+        self.realtime_check.setChecked(True)
+
+        fields = [
+            self.frequency_start_edit, self.frequency_step_edit,
+            self.output_power_edit, self.frequency_stop_edit
+        ]
+
+        for field in fields:
+            field.setValidator(QDoubleValidator())
+
+        # Layout parameters
+        for i, label in enumerate(labels):
+            params_layout.addWidget(QLabel(label), i, 0)
+
+        params_layout.addWidget(self.frequency_start_edit, 0, 1)
+        params_layout.addWidget(self.frequency_step_edit, 1, 1)
+        params_layout.addWidget(self.output_power_edit, 2, 1)
+        params_layout.addWidget(self.frequency_stop_edit, 3, 1)
+        params_layout.addWidget(self.averages_spin, 4, 1)
+        params_layout.addWidget(self.realtime_check, 5, 0, 1, 2)
+
+        # Plot
         self.canvas = MplCanvas(self, width=5, height=4, dpi=90)
         self.toolbar = NavigationToolbar2QT(self.canvas, self)
 
-        # Добавляем toolbar без stretch factor
+        # Assemble main layout
         main_layout.addWidget(self.toolbar)
         main_layout.addWidget(self.canvas)
+        main_layout.addWidget(self.progress_bar)
+        main_layout.addLayout(control_layout)
+        main_layout.addLayout(params_layout)
 
         self.setLayout(main_layout)
 
-        setup(-20, 2.83 * 1E9, 2.9 * 1E9, 500 * 1E3)
-        input("Включи. Теперь enter")
-        print("Поехали !")
-        impulse_builder(3, [0, 1, 2], [1, 1, 1], [0, 10, 0], [10, 20, 10], 10, 1000000, 1)
+        # Initialize plot
+        self.canvas.axes.set_xlabel('Частота (MHz)')
+        self.canvas.axes.set_ylabel('Нормализованный сигнал')
+        self.plot_line, = self.canvas.axes.plot([], [], 'b-')
+        self.canvas.draw()
 
+    def generate_frequencies(self):
+        try:
+            start = float(self.frequency_start_edit.text()) * 1e6  # MHz to Hz
+            stop = float(self.frequency_stop_edit.text()) * 1e6  # MHz to Hz
+            step = float(self.frequency_step_edit.text())  # Hz
+
+            if start >= stop:
+                raise ValueError("Start frequency must be less than stop frequency")
+            if step <= 0:
+                raise ValueError("Step must be positive")
+
+            self.frequencies = np.arange(start, stop + step, step)
+            self.num_points = len(self.frequencies)
+            self.progress_bar.setMaximum(self.num_points)
+            return True
+
+        except ValueError as e:
+            self.logger.log(f"Frequency generation error: {e}", "Error", "ODMRTab")
+            return False
+
+    def load_impulse_config(self):
+        """Загружает конфигурацию импульсов из файла"""
+        filename, _ = QFileDialog.getOpenFileName(
+            self,
+            "Загрузить конфигурацию импульсов",
+            "",
+            "Pulse Config Files (*.pcfg);;All Files (*)"
+        )
+        if not filename:
+            return False
+
+        try:
+            with open(filename, 'r') as f:
+                content = f.read().strip()
+
+            # Удаляем внешние скобки если они есть
+            if content.startswith('(') and content.endswith(')'):
+                content = content[1:-1].strip()
+
+            # Разбиваем строку на элементы
+            elements = []
+            current = ""
+            in_list = False
+            for char in content:
+                if char == '[':
+                    in_list = True
+                    current += char
+                elif char == ']':
+                    in_list = False
+                    current += char
+                elif char == ',' and not in_list:
+                    elements.append(current.strip())
+                    current = ""
+                else:
+                    current += char
+            elements.append(current.strip())
+
+            # Проверяем минимальное количество элементов
+            if len(elements) < 5:
+                raise ValueError("Недостаточно параметров в файле (требуется минимум 5)")
+
+            # Функция для безопасного парсинга списков
+            def parse_list(s):
+                s = s.strip()
+                if not (s.startswith('[') and s.endswith(']')):
+                    raise ValueError(f"Ожидается список в квадратных скобках: {s}")
+                return [int(item.strip()) for item in s[1:-1].split(',') if item.strip()]
+
+            # Основные параметры
+            num_channels = int(elements[0])
+            channels = parse_list(elements[1])
+            counts = parse_list(elements[2])
+            starts = parse_list(elements[3])
+            stops = parse_list(elements[4])
+
+            # Проверяем согласованность данных
+            if len(channels) != len(counts):
+                raise ValueError("Количество каналов не совпадает с количеством счетчиков")
+
+            total_pulses = sum(counts)
+            if len(starts) != total_pulses or len(stops) != total_pulses:
+                raise ValueError("Количество стартов/стопов не соответствует количеству импульсов")
+
+            # Сохраняем конфигурацию
+            self.impulse_config = {
+                'num_channels': num_channels,
+                'channels': channels,
+                'counts': counts,
+                'starts': starts,
+                'stops': stops,
+                'repeat_time': elements[5].strip() if len(elements) > 5 else "10",
+                'pulse_scale': elements[6].strip() if len(elements) > 6 else "1",
+                'rep_scale': elements[7].strip() if len(elements) > 7 else "1"
+            }
+
+            self.logger.log(f"Конфигурация импульсов загружена из {filename}", "Info", "load_impulse_config")
+            return True
+
+        except Exception as e:
+            error_msg = f"Ошибка при загрузке: {str(e)}"
+            self.logger.log(error_msg, "Error", "load_impulse_config")
+            return False
+
+    def validate_inputs(self):
+        try:
+            if not all([self.frequency_start_edit.text(),
+                        self.frequency_stop_edit.text(),
+                        self.frequency_step_edit.text(),
+                        self.output_power_edit.text()]):
+                self.logger.log("Not all parameters are filled", "Error", "ODMRTab")
+                return False
+
+            gain = float(self.output_power_edit.text())
+            if not (-20 <= gain <= 20):
+                self.logger.log("Power must be between -20 and 20 dBm", "Error", "ODMRTab")
+                return False
+
+            if not self.impulse_config:
+                self.logger.log("No impulse configuration loaded", "Error", "ODMRTab")
+                return False
+
+            return True
+        except ValueError:
+            self.logger.log("Invalid parameter values", "Error", "ODMRTab")
+            return False
+
+    def setup_devices(self):
+        try:
+            gain = int(self.output_power_edit.text())
+            start_freq = float(self.frequency_start_edit.text()) * 1e6
+            stop_freq = float(self.frequency_stop_edit.text()) * 1e6
+            step_freq = float(self.frequency_step_edit.text())
+
+            setup(gain, start_freq, stop_freq, step_freq)
+            return True
+        except Exception as e:
+            self.logger.log(f"Device setup error: {str(e)}", "Error", "ODMRTab")
+            return False
+
+    def toggle_measurement(self):
+        if self.measurement_running:
+            self.stop_measurement()
+        else:
+            self.start_measurement()
+
+    def start_measurement(self):
+        if not self.validate_inputs() or not self.generate_frequencies():
+            return
+
+        reply = QMessageBox.question(
+            self, ' ', "Переведите тумблер на SpinCore ↑.\nПосле этого нажмите OK",
+            QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel
+        )
+
+        if reply != QMessageBox.StandardButton.Ok:
+            return
+
+        if not self.setup_devices():
+            return
+
+        # Загружаем конфигурацию импульсов после подтверждения
+        try:
+            # Проверяем, что конфигурация загружена
+            if not self.impulse_config:
+                self.logger.log("No impulse configuration loaded", "Error", "ODMRTab")
+                return False
+
+                # Запускаем импульсную последовательность
+            #FIXME !!!!
+            """impulse_builder(
+                self.impulse_config['num_channels'],
+                self.impulse_config['channels'],
+                self.impulse_config['counts'],
+                self.impulse_config['starts'],
+                self.impulse_config['stops'],
+                int(self.impulse_config['repeat_time']),
+                int(self.impulse_config['pulse_scale']),
+                int(self.impulse_config['rep_scale'])
+                )"""
+        except Exception as e:
+            self.logger.log(f"Error starting impulse sequence: {str(e)}", "Error", "ODMRTab")
+            return False
+
+        self.measurement_running = True
+        self.measurement_button.setText("Стоп")
+        self.current_point = 0
+        self.progress_bar.setValue(0)
+        self.progress_bar.setFormat(f"0% | 0/{self.num_points}")
+
+        # Clear plot
+        self.canvas.axes.clear()
+        self.plot_line, = self.canvas.axes.plot([], [], 'b-')
+        self.canvas.axes.set_xlabel('Частота (MHz)')
+        self.canvas.axes.set_ylabel('Нормализованный сигнал')
+
+        # Start data processing thread
+        self.data_thread = DataProcessingThread(
+            self.num_points,
+            self.averages_spin.value(),
+            self.logger
+        )
+        self.data_thread.data_updated.connect(self.update_plot)
+        self.data_thread.start()
+
+        # Start packet sniffing thread
         self.sniff_thread = SniffThread(self.logger)
-        self.sniff_thread.packet_signal.connect(self.packet_received)
+        self.sniff_thread.packet_signal.connect(self.process_packet)
         self.sniff_thread.start()
 
-    def packet_received(self, packet):
-        if len(self.tem) < 141:
-            self.tem.append(packet["count_pos"])
-        else:
-            self.canvas.axes.clear()
-            self.canvas.axes.cla()
-            self.resq.append(self.tem)
-            self.tem = []
-            self.canvas_thread = CanvasThread(self.logger, self.canvas, self.freq, self.resq)
-            self.canvas_thread.start()
+    def stop_measurement(self):
+        self.measurement_running = False
+        self.measurement_button.setText("Старт")
+
+        if self.sniff_thread:
+            self.sniff_thread.stop()
+            self.sniff_thread.wait()
+            self.sniff_thread = None
+
+        if self.data_thread:
+            self.data_thread.stop()
+            self.data_thread.wait()
+            self.data_thread = None
+
+    def process_packet(self, packet):
+        if not self.measurement_running:
+            return
+
+        if packet['flag_pos'] == 1:
+            count_pos = packet['count_pos']
+            count_neg = packet['count_neg']
+
+            if self.data_thread:
+                self.data_thread.add_data_point(self.current_point, count_pos, count_neg)
+
+            self.current_point += 1
+            if self.current_point >= self.num_points:
+                self.current_point = 0
+                if self.data_thread:
+                    self.data_thread.increment_sweep()
+
+            self.progress_bar.setValue(self.current_point)
+            self.progress_bar.setFormat(
+                f"{int(100 * self.current_point / self.num_points)}% | "
+                f"{self.current_point}/{self.num_points}"
+            )
+
+    def update_plot(self, ratio, valid_samples, sweep_num):
+        if not self.realtime_check.isChecked() and sweep_num > 0:
+            return
+
+        x_data = self.frequencies[valid_samples] / 1e6  # Convert to MHz
+        y_data = ratio[valid_samples]
+
+        self.plot_line.set_data(x_data, y_data)
+        self.canvas.axes.relim()
+        self.canvas.axes.autoscale_view()
+        self.canvas.draw()
+
+    def closeEvent(self, event):
+        self.stop_measurement()
+        super().closeEvent(event)

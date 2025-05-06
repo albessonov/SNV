@@ -1,6 +1,8 @@
 from ctypes import CDLL, POINTER, c_int, c_char_p, create_string_buffer
+import os
 
-lib = CDLL('./generator_lib.dll')
+dll_path = os.path.abspath('C:\\Users\\verrg\\Projects\\SNV\\hardware\\generator_lib.dll')
+lib = CDLL(dll_path)
 
 StrBuild = lib.StrBuild
 StrBuild.restype = POINTER(POINTER(POINTER(c_int)))
@@ -35,14 +37,6 @@ def _config_builder(num_channels, channel_numbers, impulse_counts, start_times, 
         result.extend(f'_{time}' for time in channel_start_times + channel_stop_times)
 
     return ''.join(result)
-
-
-# result_str = _config_builder(2, [0, 1], [2, 3], [0, 350, 0, 200, 350], [150, 400, 150, 300, 400])
-
-# t = result_str.encode('utf-8')
-
-# print(t)
-
 
 def impulse_builder(num_channels: int, channel_numbers: list[int], impulse_counts: list[int], start_times: list[int],
                     stop_times: list[int], repeat_time, pulse_scale, rep_scale):
