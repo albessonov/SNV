@@ -1,7 +1,7 @@
 from ctypes import CDLL, POINTER, c_int, c_char_p, create_string_buffer
 import os
 
-dll_path = os.path.abspath('C:\\Users\\verrg\\Projects\\SNV\\hardware\\generator_lib.dll')
+dll_path = os.path.abspath('./hardware/generator_lib.dll')
 lib = CDLL(dll_path)
 
 StrBuild = lib.StrBuild
@@ -40,6 +40,7 @@ def _config_builder(num_channels, channel_numbers, impulse_counts, start_times, 
 
 def impulse_builder(num_channels: int, channel_numbers: list[int], impulse_counts: list[int], start_times: list[int],
                     stop_times: list[int], repeat_time, pulse_scale, rep_scale):
+    #pulse_scale, rep_scale 1- нс, 1E3 мкс ...
     setPb(StrBuild(create_string_buffer(
         _config_builder(num_channels, channel_numbers, impulse_counts, start_times, stop_times).encode("utf-8"))), repeat_time, pulse_scale,
         rep_scale)

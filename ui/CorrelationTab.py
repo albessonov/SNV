@@ -102,7 +102,7 @@ class SniffThread(QThread):
         # Функция обратного вызова для обработки каждого пакета
         def packet_callback(packet):
             if packet.haslayer("Raw"):
-                payload = bytes(packet["Raw"].load)[28:]
+                payload = bytes(packet["Raw"].load)[42:]
 
                 # Защита от неверного размера
                 if len(payload) < 58:
@@ -133,8 +133,6 @@ class SniffThread(QThread):
                     tp2_b = [np.round((tp2[i] >> 7) * 5, 1) for i in range(len(tp2))]  # ns
                     tp2_r = [(tp2_a[i] + tp2_b[i]) for i in range(len(tp2_a))]  # ns
 
-                    count_pos = int.from_bytes(payload[58:59], byteorder="little")
-                    count_neg = int.from_bytes(payload[60:61], byteorder="little")
 
                     # Создаем словарь с результатами
                     # FIXME Есть определённая избыточность в получаемых данных, стоит разделить на два метода: один чисто для счёта фотонов, другой для корелляции
@@ -148,15 +146,11 @@ class SniffThread(QThread):
                         "cnt_photon_2": cnt_photon_2,
                         "tp1_r": np.array(list(set(tp1_r))),
                         "tp2_r": np.array(list(set(tp2_r))),
-                        "count_neg": count_neg,
-                        "count_pos": count_pos
 
                     }
                     if flag_valid == 1:
                         # Отправляем данные через сигнал
                         self.packet_signal.emit(result)
-                        if flag_neg == 1 or flag_pos == 1:
-                            print(f"Counts {count_pos}   ({count_neg})")
                 except Exception:
                     self.logger.log(f"Неудачный парсинг пакета", "Error", "packet_callback")
 
@@ -273,12 +267,18 @@ class CorrelationTab(QWidget):
 
     def control_button_clicked(self):
         if not self.sniff_thread.isRunning():
+            self.photon_data = deque(maxlen=10000)
+            self.hist_data = None
+
+            self.plot_widget.clear()
             self.sniff_thread.start()
             self.control_button.setText("Стоп")
         else:
             self.sniff_thread.requestInterruption()
-            self.sniff_thread.quit()
-            self.sniff_thread.wait()
+            self.sniff_thread.terminate()
+            self.plot_thread.is_killed = True
+            self.init = False
+
             self.control_button.setText("Старт")
 
     def save_histogram(self):

@@ -11,7 +11,8 @@ from pyvisa import ResourceManager
 from scapy.sendrecv import sniff
 
 from hardware.rigol_rw import setup
-#from hardware.spincore import impulse_builder
+from hardware.spincore import impulse_builder
+# from hardware.spincore import impulse_builder
 from ui.CorrelationTab import MplCanvas
 
 
@@ -29,7 +30,7 @@ class SniffThread(QThread):
                 return
 
             if packet.haslayer("Raw"):
-                payload = bytes(packet["Raw"].load)[28:]
+                payload = bytes(packet["Raw"].load)[42:]
 
                 if len(payload) < 58:
                     return
@@ -40,8 +41,8 @@ class SniffThread(QThread):
                     flag_valid = byte6 & 0x1
                     flag_pos = (byte6 & 0x10) >> 4
                     flag_neg = (byte6 & 0x8) >> 3
-                    count_pos = int.from_bytes(payload[58:59], byteorder="little")
-                    count_neg = int.from_bytes(payload[60:61], byteorder="little")
+                    count_pos = int.from_bytes(payload[58:61], byteorder="little")
+                    count_neg = int.from_bytes(payload[61:63], byteorder="little")
 
                     result = {
                         "package_id": package_id,
@@ -68,65 +69,44 @@ class SniffThread(QThread):
 
 
 class DataProcessingThread(QThread):
-    data_updated = pyqtSignal(np.ndarray, np.ndarray, int)
+    data_updated = pyqtSignal(np.ndarray, int)
 
-    def __init__(self, num_points, num_averages, logger):
+    def __init__(self, num_points, logger):
         super().__init__()
         self.num_points = num_points
-        self.num_averages = num_averages
         self.logger = logger
-        self.mutex = QMutex()
-        self.data = []
+        self.data = {
+            'count_pos': None,
+            'num_samples': None
+        }
         self.current_sweep = 0
         self.running = True
-
-        # Initialize data arrays
         self.reset_data()
 
     def reset_data(self):
-        self.mutex.lock()
-        self.data = [{
-            'count_pos': np.zeros(self.num_points),
-            'count_neg': np.zeros(self.num_points),
-            'num_samples': np.zeros(self.num_points)
-        } for _ in range(self.num_averages)]
+        self.data['count_pos'] = np.zeros(self.num_points)
+        self.data['num_samples'] = np.zeros(self.num_points)
         self.current_sweep = 0
-        self.mutex.unlock()
 
-    def add_data_point(self, index, count_pos, count_neg):
-        self.mutex.lock()
+    def add_data_point(self, index, count_pos):
         try:
-            avg_idx = self.current_sweep % self.num_averages
-            self.data[avg_idx]['count_pos'][index] += count_pos
-            self.data[avg_idx]['count_neg'][index] += count_neg
-            self.data[avg_idx]['num_samples'][index] += 1
+            if index <= self.num_points:
+                self.data['count_pos'][index] += count_pos
+                self.data['num_samples'][index] += 1
 
-            # Calculate averaged data
-            total_pos = np.zeros(self.num_points)
-            total_neg = np.zeros(self.num_points)
-            total_samples = np.zeros(self.num_points)
+                # Рассчитываем усредненные данные
+                ratio = self.data['count_pos']
+                # ratio[valid_samples] = self.data['count_pos'][valid_samples]
 
-            for d in self.data:
-                total_pos += d['count_pos']
-                total_neg += d['count_neg']
-                total_samples += d['num_samples']
-
-            # Avoid division by zero
-            valid_samples = total_samples > 0
-            ratio = np.zeros(self.num_points)
-            ratio[valid_samples] = total_pos[valid_samples] / (total_pos[valid_samples] + total_neg[valid_samples])
-
-            self.data_updated.emit(ratio, valid_samples, self.current_sweep)
+                self.data_updated.emit(ratio, self.current_sweep)
 
         except Exception as e:
-            self.logger.log(f"Data processing error: {e}", "Error", "DataProcessingThread")
-        finally:
-            self.mutex.unlock()
+            self.logger.log(f"Data processing error: {str(e)}", "Error", "DataProcessingThread")
 
     def increment_sweep(self):
-        self.mutex.lock()
         self.current_sweep += 1
-        self.mutex.unlock()
+        # Можно добавить сброс данных для нового свипа, если нужно
+        # self.reset_data()
 
     def stop(self):
         self.running = False
@@ -144,6 +124,9 @@ class ODMRTab(QWidget):
         self.current_point = 0
         self.num_points = 0
         self.impulse_config = None
+        self.increment_sweep = 0
+        self.last_inc_value = 0
+        self.prev_current_point = 0
 
         self.init_ui()
 
@@ -336,7 +319,7 @@ class ODMRTab(QWidget):
                 return False
 
             gain = float(self.output_power_edit.text())
-            if not (-20 <= gain <= 20):
+            if not (-110 <= gain <= 0):
                 self.logger.log("Power must be between -20 and 20 dBm", "Error", "ODMRTab")
                 return False
 
@@ -356,7 +339,32 @@ class ODMRTab(QWidget):
             stop_freq = float(self.frequency_stop_edit.text()) * 1e6
             step_freq = float(self.frequency_step_edit.text())
 
-            setup(gain, start_freq, stop_freq, step_freq)
+            #setup(gain, start_freq, stop_freq, step_freq)
+            points_number = int(round((stop_freq - start_freq) / step_freq)) + 1
+            if points_number > 65535:
+                raise ValueError(f"Слишком много точек ({points_number}), максимум 10001")
+
+            rm = ResourceManager()
+            RES = "USB0::0x1AB1::0x099C::DSG3G264300050::INSTR"
+            self.dev = rm.open_resource(RES)
+            # Настройка параметров развертки
+            self.dev.write(f':SWE:RES')
+            self.dev.write(f':LEV {gain}dBm')
+            self.dev.write(':SOUR1:FUNC:MODE SWE')
+            self.dev.write(":SWE:MODE CONT")
+            self.dev.write(":SWE:STEP:SHAP RAMP")
+            self.dev.write(":SWE:TYPE STEP")
+
+            # Установка частотных параметров
+            self.dev.write(f":SWE:STEP:POIN {points_number}")
+            self.dev.write(f":SWE:STEP:STAR:FREQ {start_freq}")
+            self.dev.write(f":SWE:STEP:STOP:FREQ {stop_freq}")
+
+            # Настройка триггера
+            self.dev.write("SWE:POIN:TRIG:TYPE EXT")
+
+            # Включение выхода
+            self.dev.write(":OUTP 1")
             return True
         except Exception as e:
             self.logger.log(f"Device setup error: {str(e)}", "Error", "ODMRTab")
@@ -390,9 +398,8 @@ class ODMRTab(QWidget):
                 self.logger.log("No impulse configuration loaded", "Error", "ODMRTab")
                 return False
 
-                # Запускаем импульсную последовательность
-            #FIXME !!!!
-            """impulse_builder(
+            # Запускаем импульсную последовательность
+            impulse_builder(
                 self.impulse_config['num_channels'],
                 self.impulse_config['channels'],
                 self.impulse_config['counts'],
@@ -401,7 +408,7 @@ class ODMRTab(QWidget):
                 int(self.impulse_config['repeat_time']),
                 int(self.impulse_config['pulse_scale']),
                 int(self.impulse_config['rep_scale'])
-                )"""
+            )
         except Exception as e:
             self.logger.log(f"Error starting impulse sequence: {str(e)}", "Error", "ODMRTab")
             return False
@@ -416,12 +423,11 @@ class ODMRTab(QWidget):
         self.canvas.axes.clear()
         self.plot_line, = self.canvas.axes.plot([], [], 'b-')
         self.canvas.axes.set_xlabel('Частота (MHz)')
-        self.canvas.axes.set_ylabel('Нормализованный сигнал')
+        self.canvas.axes.set_ylabel('Сигнал')
 
         # Start data processing thread
         self.data_thread = DataProcessingThread(
             self.num_points,
-            self.averages_spin.value(),
             self.logger
         )
         self.data_thread.data_updated.connect(self.update_plot)
@@ -452,16 +458,12 @@ class ODMRTab(QWidget):
 
         if packet['flag_pos'] == 1:
             count_pos = packet['count_pos']
-            count_neg = packet['count_neg']
 
-            if self.data_thread:
-                self.data_thread.add_data_point(self.current_point, count_pos, count_neg)
+            freq = int(float(str(self.dev.query(":FREQ?")).strip()))
+            start_freq = int(min(self.frequencies))
+            freq_step = float(self.frequency_step_edit.text())
 
-            self.current_point += 1
-            if self.current_point >= self.num_points:
-                self.current_point = 0
-                if self.data_thread:
-                    self.data_thread.increment_sweep()
+            self.data_thread.add_data_point(self.current_point, count_pos)
 
             self.progress_bar.setValue(self.current_point)
             self.progress_bar.setFormat(
@@ -469,12 +471,17 @@ class ODMRTab(QWidget):
                 f"{self.current_point}/{self.num_points}"
             )
 
-    def update_plot(self, ratio, valid_samples, sweep_num):
-        if not self.realtime_check.isChecked() and sweep_num > 0:
-            return
+            if self.current_point == self.num_points:
+                self.increment_sweep += 1
+                self.current_point = 0
+            else:
+                self.current_point += 1
 
-        x_data = self.frequencies[valid_samples] / 1e6  # Convert to MHz
-        y_data = ratio[valid_samples]
+
+    def update_plot(self, ratio, sweep_num):
+        x_data = self.frequencies / 1e6  # Convert to MHz
+        y_data = ratio / (self.increment_sweep + 1)
+        # print((self.increment_sweep)+1, ratio[21], y_data[21])
 
         self.plot_line.set_data(x_data, y_data)
         self.canvas.axes.relim()

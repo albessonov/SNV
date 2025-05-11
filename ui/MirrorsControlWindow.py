@@ -16,6 +16,7 @@ class MirrorsControlWindow(QWidget):
         self.setFixedSize(300, 300)
 
         self.serial_device = open_serial_port(self.logger)
+        #FIXME пока это неверно
         self.current_position = get_position(self.serial_device, self.logger)
         self.center = self.current_position
 
@@ -147,6 +148,8 @@ class MirrorsControlWindow(QWidget):
 
     def go_center_button_pressed(self):
         move_to_position(self.serial_device, self.center, self.center, self.logger)
+        self.x_coord_field.setValue(self.center[0])
+        self.y_coord_field.setValue(self.center[1])
 
     def go_button_pressed(self):
         x_coord = float(self.x_coord_field.value())
@@ -156,6 +159,8 @@ class MirrorsControlWindow(QWidget):
 
         self.current_position = [x_coord, y_coord]
 
-
+    def closeEvent(self, event):
+        self.serial_device.close()
+        super().closeEvent(event)
 
 

@@ -1,1 +1,0 @@
-1. Необходимо установить Visual C++ Redistributable

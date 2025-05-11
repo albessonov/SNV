@@ -6,6 +6,7 @@ from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.backends.backend_template import FigureCanvas
 from matplotlib.figure import Figure
 
+from hardware.spincore import impulse_builder
 from ui.CorrelationTab import MplCanvas
 
 
@@ -214,6 +215,11 @@ class ImpulseTab(QWidget):
             stop_times  # все времена стопов (сгруппированные по каналам)
         )
 
+        impulse_builder(self.data[0], self.data[1], self.data[2], self.data[3], self.data[4], int(self.repeat_time_field.text()),
+                        int(self.pulse_scale_field.text()), int(self.rep_scale_field.text()))
+
+
+
         return self.data
 
     @staticmethod
@@ -330,6 +336,7 @@ class ImpulseTab(QWidget):
             if content.startswith('(') and content.endswith(')'):
                 content = content[1:-1].strip()
 
+
             # Разбиваем строку на элементы
             elements = []
             current = ""
@@ -373,6 +380,8 @@ class ImpulseTab(QWidget):
                 self.pulse_scale_field.setText(elements[6].strip())
             if len(elements) > 7:
                 self.rep_scale_field.setText(elements[7].strip())
+
+            impulse_builder(num_channels, channels, counts, starts, stops, int(elements[5].strip()), int(elements[6].strip()), int(elements[7].strip()))
 
             # Проверяем согласованность данных
             if len(channels) != len(counts):
