@@ -25,7 +25,6 @@ class PhotonCounterWindow(QWidget):
 
     def packet_received(self, packet):
         if not self.init and packet['flag']:
-            # Инициализация при первом флаговом пакете
             self.plot_thread = CounterWorker(self.canvas, self.photon_data)
             self.plot_thread.start()
             self.init = True

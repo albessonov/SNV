@@ -11,7 +11,7 @@ from pyvisa import ResourceManager
 from scapy.sendrecv import sniff
 
 from hardware.rigol_rw import setup
-from hardware.spincore import impulse_builder
+#from hardware.spincore import impulse_builder
 # from hardware.spincore import impulse_builder
 from ui.CorrelationTab import MplCanvas
 
@@ -75,38 +75,21 @@ class DataProcessingThread(QThread):
         super().__init__()
         self.num_points = num_points
         self.logger = logger
-        self.data = {
-            'count_pos': None,
-            'num_samples': None
-        }
-        self.current_sweep = 0
+        self.data = []
         self.running = True
         self.reset_data()
 
     def reset_data(self):
-        self.data['count_pos'] = np.zeros(self.num_points)
-        self.data['num_samples'] = np.zeros(self.num_points)
-        self.current_sweep = 0
+        self.data = np.zeros(self.num_points)
 
     def add_data_point(self, index, count_pos):
         try:
             if index <= self.num_points:
-                self.data['count_pos'][index] += count_pos
-                self.data['num_samples'][index] += 1
-
-                # Рассчитываем усредненные данные
-                ratio = self.data['count_pos']
-                # ratio[valid_samples] = self.data['count_pos'][valid_samples]
-
-                self.data_updated.emit(ratio, self.current_sweep)
+                self.data[index] += count_pos
+                self.data_updated.emit(self.data)
 
         except Exception as e:
             self.logger.log(f"Data processing error: {str(e)}", "Error", "DataProcessingThread")
-
-    def increment_sweep(self):
-        self.current_sweep += 1
-        # Можно добавить сброс данных для нового свипа, если нужно
-        # self.reset_data()
 
     def stop(self):
         self.running = False
@@ -125,8 +108,6 @@ class ODMRTab(QWidget):
         self.num_points = 0
         self.impulse_config = None
         self.increment_sweep = 0
-        self.last_inc_value = 0
-        self.prev_current_point = 0
 
         self.init_ui()
 
@@ -153,20 +134,13 @@ class ODMRTab(QWidget):
 
         labels = [
             "Начальная частота, MГц", "Шаг частоты, Гц",
-            "Выходная мощность, дБм", "Конечная частота, MГц",
-            "Количество усреднений"
+            "Выходная мощность, дБм", "Конечная частота, MГц"
         ]
 
         self.frequency_start_edit = QLineEdit()
         self.frequency_step_edit = QLineEdit()
         self.output_power_edit = QLineEdit()
         self.frequency_stop_edit = QLineEdit()
-        self.averages_spin = QSpinBox()
-        self.averages_spin.setRange(1, 1000)
-        self.averages_spin.setValue(1)
-
-        self.realtime_check = QCheckBox("Обновлять график в реальном времени")
-        self.realtime_check.setChecked(True)
 
         fields = [
             self.frequency_start_edit, self.frequency_step_edit,
@@ -184,8 +158,6 @@ class ODMRTab(QWidget):
         params_layout.addWidget(self.frequency_step_edit, 1, 1)
         params_layout.addWidget(self.output_power_edit, 2, 1)
         params_layout.addWidget(self.frequency_stop_edit, 3, 1)
-        params_layout.addWidget(self.averages_spin, 4, 1)
-        params_layout.addWidget(self.realtime_check, 5, 0, 1, 2)
 
         # Plot
         self.canvas = MplCanvas(self, width=5, height=4, dpi=90)
@@ -202,7 +174,7 @@ class ODMRTab(QWidget):
 
         # Initialize plot
         self.canvas.axes.set_xlabel('Частота (MHz)')
-        self.canvas.axes.set_ylabel('Нормализованный сигнал')
+        self.canvas.axes.set_ylabel('Количество фотонов')
         self.plot_line, = self.canvas.axes.plot([], [], 'b-')
         self.canvas.draw()
 
@@ -333,42 +305,14 @@ class ODMRTab(QWidget):
             return False
 
     def setup_devices(self):
-        try:
-            gain = int(self.output_power_edit.text())
-            start_freq = float(self.frequency_start_edit.text()) * 1e6
-            stop_freq = float(self.frequency_stop_edit.text()) * 1e6
-            step_freq = float(self.frequency_step_edit.text())
+        gain = int(self.output_power_edit.text())
+        start_freq = float(self.frequency_start_edit.text()) * 1e6
+        stop_freq = float(self.frequency_stop_edit.text()) * 1e6
+        step_freq = float(self.frequency_step_edit.text())
 
-            #setup(gain, start_freq, stop_freq, step_freq)
-            points_number = int(round((stop_freq - start_freq) / step_freq)) + 1
-            if points_number > 65535:
-                raise ValueError(f"Слишком много точек ({points_number}), максимум 10001")
+        setup(gain, start_freq, stop_freq, step_freq, self.logger)
 
-            rm = ResourceManager()
-            RES = "USB0::0x1AB1::0x099C::DSG3G264300050::INSTR"
-            self.dev = rm.open_resource(RES)
-            # Настройка параметров развертки
-            self.dev.write(f':SWE:RES')
-            self.dev.write(f':LEV {gain}dBm')
-            self.dev.write(':SOUR1:FUNC:MODE SWE')
-            self.dev.write(":SWE:MODE CONT")
-            self.dev.write(":SWE:STEP:SHAP RAMP")
-            self.dev.write(":SWE:TYPE STEP")
-
-            # Установка частотных параметров
-            self.dev.write(f":SWE:STEP:POIN {points_number}")
-            self.dev.write(f":SWE:STEP:STAR:FREQ {start_freq}")
-            self.dev.write(f":SWE:STEP:STOP:FREQ {stop_freq}")
-
-            # Настройка триггера
-            self.dev.write("SWE:POIN:TRIG:TYPE EXT")
-
-            # Включение выхода
-            self.dev.write(":OUTP 1")
-            return True
-        except Exception as e:
-            self.logger.log(f"Device setup error: {str(e)}", "Error", "ODMRTab")
-            return False
+        return True
 
     def toggle_measurement(self):
         if self.measurement_running:
@@ -399,7 +343,7 @@ class ODMRTab(QWidget):
                 return False
 
             # Запускаем импульсную последовательность
-            impulse_builder(
+            """impulse_builder(
                 self.impulse_config['num_channels'],
                 self.impulse_config['channels'],
                 self.impulse_config['counts'],
@@ -408,7 +352,7 @@ class ODMRTab(QWidget):
                 int(self.impulse_config['repeat_time']),
                 int(self.impulse_config['pulse_scale']),
                 int(self.impulse_config['rep_scale'])
-            )
+            )"""
         except Exception as e:
             self.logger.log(f"Error starting impulse sequence: {str(e)}", "Error", "ODMRTab")
             return False
@@ -433,7 +377,6 @@ class ODMRTab(QWidget):
         self.data_thread.data_updated.connect(self.update_plot)
         self.data_thread.start()
 
-        # Start packet sniffing thread
         self.sniff_thread = SniffThread(self.logger)
         self.sniff_thread.packet_signal.connect(self.process_packet)
         self.sniff_thread.start()
@@ -459,16 +402,13 @@ class ODMRTab(QWidget):
         if packet['flag_pos'] == 1:
             count_pos = packet['count_pos']
 
-            freq = int(float(str(self.dev.query(":FREQ?")).strip()))
-            start_freq = int(min(self.frequencies))
-            freq_step = float(self.frequency_step_edit.text())
-
             self.data_thread.add_data_point(self.current_point, count_pos)
 
             self.progress_bar.setValue(self.current_point)
             self.progress_bar.setFormat(
                 f"{int(100 * self.current_point / self.num_points)}% | "
-                f"{self.current_point}/{self.num_points}"
+                f"{self.current_point}/{self.num_points} |"
+                f"проход: {self.increment_sweep + 1}"
             )
 
             if self.current_point == self.num_points:
@@ -477,11 +417,9 @@ class ODMRTab(QWidget):
             else:
                 self.current_point += 1
 
-
-    def update_plot(self, ratio, sweep_num):
-        x_data = self.frequencies / 1e6  # Convert to MHz
+    def update_plot(self, ratio):
+        x_data = self.frequencies / 1e6
         y_data = ratio / (self.increment_sweep + 1)
-        # print((self.increment_sweep)+1, ratio[21], y_data[21])
 
         self.plot_line.set_data(x_data, y_data)
         self.canvas.axes.relim()

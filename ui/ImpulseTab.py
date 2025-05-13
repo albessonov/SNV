@@ -1,12 +1,13 @@
 import pandas as pd
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QTableWidget, QTableWidgetItem, QLineEdit, \
-    QPushButton, QFileDialog, QHeaderView, QSizePolicy
+    QPushButton, QFileDialog, QHeaderView, QSizePolicy, QComboBox, QLabel
+from matplotlib.backends.backend_qt import NavigationToolbar2QT
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.backends.backend_template import FigureCanvas
 from matplotlib.figure import Figure
 
-from hardware.spincore import impulse_builder
+#from hardware.spincore import impulse_builder
 from ui.CorrelationTab import MplCanvas
 
 
@@ -95,7 +96,9 @@ class ImpulseTab(QWidget):
         self.data = None
         self.save_path = None
         self.open_path = None
-        self.simulation_time = 500
+        self.pulse_scale = 0
+        self.rep_scale = 0
+
         layout = QHBoxLayout()
         layout.addWidget(self.canvas)
         input_layout = QVBoxLayout()
@@ -129,15 +132,29 @@ class ImpulseTab(QWidget):
         self.repeat_time_field = QLineEdit()
         self.repeat_time_field.setPlaceholderText("Время повтора")
 
-        self.pulse_scale_field = QLineEdit()
-        self.pulse_scale_field.setPlaceholderText("pulse_scale_field")
+        pulse_scale_text = QLabel("Множитель времени импульса")
 
-        self.rep_scale_field = QLineEdit()
-        self.rep_scale_field.setPlaceholderText("rep_scale_field")
+        self.pulse_scale_field = QComboBox()
+        self.pulse_scale_field.addItems(["нс", "мкс", "мс"])
+        self.pulse_scale_field.currentIndexChanged.connect(self.pulse_scale_chosen)
+
+        rep_scale_text = QLabel("Множитель времени повтора")
+
+        self.rep_scale_field = QComboBox()
+        self.rep_scale_field.addItems(["нс", "мкс", "мс"])
+        self.rep_scale_field.currentIndexChanged.connect(self.rep_scale_chosen)
+
+        pulse_scale_layout = QHBoxLayout()
+        pulse_scale_layout.addWidget(pulse_scale_text)
+        pulse_scale_layout.addWidget(self.pulse_scale_field)
+
+        rep_scale_layout = QHBoxLayout()
+        rep_scale_layout.addWidget(rep_scale_text)
+        rep_scale_layout.addWidget(self.rep_scale_field)
 
         parameters_layout.addWidget(self.repeat_time_field)
-        parameters_layout.addWidget(self.pulse_scale_field)
-        parameters_layout.addWidget(self.rep_scale_field)
+        parameters_layout.addLayout(pulse_scale_layout)
+        parameters_layout.addLayout(rep_scale_layout)
 
         input_layout.addLayout(parameters_layout)
 
@@ -215,8 +232,8 @@ class ImpulseTab(QWidget):
             stop_times  # все времена стопов (сгруппированные по каналам)
         )
 
-        impulse_builder(self.data[0], self.data[1], self.data[2], self.data[3], self.data[4], int(self.repeat_time_field.text()),
-                        int(self.pulse_scale_field.text()), int(self.rep_scale_field.text()))
+        """impulse_builder(self.data[0], self.data[1], self.data[2], self.data[3], self.data[4], int(self.repeat_time_field.text()),
+                        int(self.pulse_scale), int(self.rep_scale))"""
 
 
 
@@ -228,6 +245,22 @@ class ImpulseTab(QWidget):
         item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
         table.setItem(row, col, item)
         return item
+
+    def pulse_scale_chosen(self, i):
+        if i == 0:
+            self.pulse_scale = 1
+        elif i == 1:
+            self.pulse_scale = 1E3
+        elif i == 2:
+            self.pulse_scale = 1E6
+
+    def rep_scale_chosen(self, i):
+        if i == 0:
+            self.rep_scale = 1
+        elif i == 1:
+            self.rep_scale = 1E3
+        elif i == 2:
+            self.rep_scale = 1E6
 
     def add_impulse(self):
         row = self.table.rowCount()
@@ -302,7 +335,7 @@ class ImpulseTab(QWidget):
 
             # Формируем строку для сохранения
             data_str = (
-                f"({num_channels}, {channels}, {counts}, {starts}, {stops}, {self.repeat_time_field.text()}, {self.pulse_scale_field.text()}, {self.rep_scale_field.text()})"
+                f"({num_channels}, {channels}, {counts}, {starts}, {stops}, {self.repeat_time_field.text()}, {self.pulse_scale_field.currentIndex()}, {self.rep_scale_field.currentIndex()})"
             )
 
             # Записываем в файл
@@ -377,11 +410,11 @@ class ImpulseTab(QWidget):
             if len(elements) > 5:
                 self.repeat_time_field.setText(elements[5].strip())
             if len(elements) > 6:
-                self.pulse_scale_field.setText(elements[6].strip())
+                self.pulse_scale_field.setCurrentIndex(elements[6].strip())
             if len(elements) > 7:
-                self.rep_scale_field.setText(elements[7].strip())
+                self.rep_scale_field.setCurrentIndex(elements[7].strip())
 
-            impulse_builder(num_channels, channels, counts, starts, stops, int(elements[5].strip()), int(elements[6].strip()), int(elements[7].strip()))
+            """impulse_builder(num_channels, channels, counts, starts, stops, int(elements[5].strip()), int(elements[6].strip()), int(elements[7].strip()))"""
 
             # Проверяем согласованность данных
             if len(channels) != len(counts):
@@ -415,7 +448,6 @@ class ImpulseTab(QWidget):
             return False
 
     def update_plots(self):
-        print(self.data)
         """Обновление графиков импульсов"""
         self.canvas.plot_pulses(self.data)
 
