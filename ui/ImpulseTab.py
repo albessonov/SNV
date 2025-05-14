@@ -7,7 +7,7 @@ from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.backends.backend_template import FigureCanvas
 from matplotlib.figure import Figure
 
-#from hardware.spincore import impulse_builder
+from hardware.spincore import impulse_builder
 from ui.CorrelationTab import MplCanvas
 
 
@@ -410,11 +410,11 @@ class ImpulseTab(QWidget):
             if len(elements) > 5:
                 self.repeat_time_field.setText(elements[5].strip())
             if len(elements) > 6:
-                self.pulse_scale_field.setCurrentIndex(elements[6].strip())
+                self.pulse_scale_field.setCurrentIndex(int(elements[6].strip()))
             if len(elements) > 7:
-                self.rep_scale_field.setCurrentIndex(elements[7].strip())
+                self.rep_scale_field.setCurrentIndex(int(elements[7].strip()))
 
-            """impulse_builder(num_channels, channels, counts, starts, stops, int(elements[5].strip()), int(elements[6].strip()), int(elements[7].strip()))"""
+            impulse_builder(num_channels, channels, counts, starts, stops, int(elements[5].strip()), int(elements[6].strip()), int(elements[7].strip()))
 
             # Проверяем согласованность данных
             if len(channels) != len(counts):

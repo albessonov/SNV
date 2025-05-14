@@ -11,8 +11,7 @@ from pyvisa import ResourceManager
 from scapy.sendrecv import sniff
 
 from hardware.rigol_rw import setup
-#from hardware.spincore import impulse_builder
-# from hardware.spincore import impulse_builder
+from hardware.spincore import impulse_builder
 from ui.CorrelationTab import MplCanvas
 
 
@@ -69,7 +68,7 @@ class SniffThread(QThread):
 
 
 class DataProcessingThread(QThread):
-    data_updated = pyqtSignal(np.ndarray, int)
+    data_updated = pyqtSignal(np.ndarray)
 
     def __init__(self, num_points, logger):
         super().__init__()
@@ -84,7 +83,7 @@ class DataProcessingThread(QThread):
 
     def add_data_point(self, index, count_pos):
         try:
-            if index <= self.num_points:
+            if index < self.num_points:
                 self.data[index] += count_pos
                 self.data_updated.emit(self.data)
 
@@ -94,6 +93,34 @@ class DataProcessingThread(QThread):
     def stop(self):
         self.running = False
         self.quit()
+
+class PlotUpdater(QThread):
+    def __init__(self, canvas, plot_line, frequencies):
+        super(PlotUpdater, self).__init__()
+        self.canvas = canvas
+        self.plot_line = plot_line
+        self.frequencies = frequencies
+        self.ratio = None
+        self.increment_sweep = 0
+        self.needs_update = False
+    
+    def update_data(self, ratio, increment_sweep):
+        self.ratio = ratio
+        self.increment_sweep = increment_sweep
+        self.needs_update = True
+    
+    def run(self):
+        while 1:
+            if self.ratio is not None and self.needs_update:
+                x_data = self.frequencies / 1e6
+                y_data = self.ratio / (self.increment_sweep + 1)
+                self.plot_line.set_data(x_data, y_data)
+                self.canvas.axes.set_title(f"Итерация: {self.increment_sweep + 1}")
+                self.canvas.axes.relim()
+                self.canvas.axes.autoscale_view()
+                self.canvas.draw()
+            self.msleep(30)
+
 
 
 class ODMRTab(QWidget):
@@ -178,6 +205,10 @@ class ODMRTab(QWidget):
         self.plot_line, = self.canvas.axes.plot([], [], 'b-')
         self.canvas.draw()
 
+        self.plot_thread = None
+        RES = "USB0::0x1AB1::0x099C::DSG3G264300050::INSTR"
+        self.rm = ResourceManager()
+
     def generate_frequencies(self):
         try:
             start = float(self.frequency_start_edit.text()) * 1e6  # MHz to Hz
@@ -189,7 +220,7 @@ class ODMRTab(QWidget):
             if step <= 0:
                 raise ValueError("Step must be positive")
 
-            self.frequencies = np.arange(start, stop + step, step)
+            self.frequencies = np.arange(start=start, stop=(stop+step), step=step)
             self.num_points = len(self.frequencies)
             self.progress_bar.setMaximum(self.num_points)
             return True
@@ -260,6 +291,25 @@ class ODMRTab(QWidget):
             total_pulses = sum(counts)
             if len(starts) != total_pulses or len(stops) != total_pulses:
                 raise ValueError("Количество стартов/стопов не соответствует количеству импульсов")
+            
+            pulse_scale_raw = int(elements[6].strip() if len(elements) > 6 else "1")
+
+            if pulse_scale_raw == 0:
+                pulse_scale_0 = 1
+            elif pulse_scale_raw == 1:
+                pulse_scale_0 = 1E3
+            elif pulse_scale_raw == 2:
+                pulse_scale_0 = 1E6
+            
+            rep_scale_raw = int(elements[7].strip() if len(elements) > 7 else "1")
+
+            if rep_scale_raw == 0:
+                rep_scale_0 = 1
+            elif rep_scale_raw == 1:
+                rep_scale_0 = 1E3
+            elif rep_scale_raw == 2:
+                rep_scale_0 = 1E6
+
 
             # Сохраняем конфигурацию
             self.impulse_config = {
@@ -269,8 +319,8 @@ class ODMRTab(QWidget):
                 'starts': starts,
                 'stops': stops,
                 'repeat_time': elements[5].strip() if len(elements) > 5 else "10",
-                'pulse_scale': elements[6].strip() if len(elements) > 6 else "1",
-                'rep_scale': elements[7].strip() if len(elements) > 7 else "1"
+                'pulse_scale': pulse_scale_0,
+                'rep_scale': rep_scale_0
             }
 
             self.logger.log(f"Конфигурация импульсов загружена из {filename}", "Info", "load_impulse_config")
@@ -323,6 +373,16 @@ class ODMRTab(QWidget):
     def start_measurement(self):
         if not self.validate_inputs() or not self.generate_frequencies():
             return
+        
+        if not self.setup_devices():
+            return
+        
+        RES = "USB0::0x1AB1::0x099C::DSG3G264300050::INSTR"
+        self.dev = self.rm.open_resource(RES)
+        
+        self.sniff_thread = SniffThread(self.logger)
+        self.sniff_thread.packet_signal.connect(self.process_packet)
+        self.sniff_thread.start()
 
         reply = QMessageBox.question(
             self, ' ', "Переведите тумблер на SpinCore ↑.\nПосле этого нажмите OK",
@@ -330,10 +390,7 @@ class ODMRTab(QWidget):
         )
 
         if reply != QMessageBox.StandardButton.Ok:
-            return
-
-        if not self.setup_devices():
-            return
+            return  
 
         # Загружаем конфигурацию импульсов после подтверждения
         try:
@@ -343,7 +400,7 @@ class ODMRTab(QWidget):
                 return False
 
             # Запускаем импульсную последовательность
-            """impulse_builder(
+            impulse_builder(
                 self.impulse_config['num_channels'],
                 self.impulse_config['channels'],
                 self.impulse_config['counts'],
@@ -352,22 +409,10 @@ class ODMRTab(QWidget):
                 int(self.impulse_config['repeat_time']),
                 int(self.impulse_config['pulse_scale']),
                 int(self.impulse_config['rep_scale'])
-            )"""
+            )
         except Exception as e:
             self.logger.log(f"Error starting impulse sequence: {str(e)}", "Error", "ODMRTab")
             return False
-
-        self.measurement_running = True
-        self.measurement_button.setText("Стоп")
-        self.current_point = 0
-        self.progress_bar.setValue(0)
-        self.progress_bar.setFormat(f"0% | 0/{self.num_points}")
-
-        # Clear plot
-        self.canvas.axes.clear()
-        self.plot_line, = self.canvas.axes.plot([], [], 'b-')
-        self.canvas.axes.set_xlabel('Частота (MHz)')
-        self.canvas.axes.set_ylabel('Сигнал')
 
         # Start data processing thread
         self.data_thread = DataProcessingThread(
@@ -377,10 +422,20 @@ class ODMRTab(QWidget):
         self.data_thread.data_updated.connect(self.update_plot)
         self.data_thread.start()
 
-        self.sniff_thread = SniffThread(self.logger)
-        self.sniff_thread.packet_signal.connect(self.process_packet)
-        self.sniff_thread.start()
+        self.measurement_running = True
+        self.current_point = 0
 
+        self.measurement_button.setText("Стоп")
+        self.progress_bar.setValue(0)
+        self.progress_bar.setFormat(f"0% | 0/{self.num_points}")
+
+        # Clear plot
+        self.canvas.axes.clear()
+        self.plot_line, = self.canvas.axes.plot([], [], 'b-')
+        self.canvas.axes.set_xlabel('Частота (MHz)')
+        self.canvas.axes.set_ylabel('Сигнал')
+
+        
     def stop_measurement(self):
         self.measurement_running = False
         self.measurement_button.setText("Старт")
@@ -400,31 +455,40 @@ class ODMRTab(QWidget):
             return
 
         if packet['flag_pos'] == 1:
-            count_pos = packet['count_pos']
 
+            if self.current_point == 0 or self.current_point+1 == self.num_points:
+                print(self.increment_sweep,self.dev.query(":FREQ?"))
+            
+            count_pos = packet['count_pos']
             self.data_thread.add_data_point(self.current_point, count_pos)
 
-            self.progress_bar.setValue(self.current_point)
-            self.progress_bar.setFormat(
+           
+            #self.progress_bar.setValue(self.current_point)
+            """self.progress_bar.setFormat(
                 f"{int(100 * self.current_point / self.num_points)}% | "
                 f"{self.current_point}/{self.num_points} |"
-                f"проход: {self.increment_sweep + 1}"
-            )
+                f"Проход: {self.increment_sweep + 1}"
+            )"""
+
+            #print((time.process_time_ns()-t)*1E-6, self.current_point)
 
             if self.current_point == self.num_points:
                 self.increment_sweep += 1
                 self.current_point = 0
             else:
                 self.current_point += 1
-
+           
     def update_plot(self, ratio):
-        x_data = self.frequencies / 1e6
-        y_data = ratio / (self.increment_sweep + 1)
+        if self.plot_thread is None:
+            self.plot_thread = PlotUpdater(
+            self.canvas,
+            self.plot_line,
+            self.frequencies
+        )
+            self.plot_thread.start()
+        else:
+            self.plot_thread.update_data(ratio, self.increment_sweep)
 
-        self.plot_line.set_data(x_data, y_data)
-        self.canvas.axes.relim()
-        self.canvas.axes.autoscale_view()
-        self.canvas.draw()
 
     def closeEvent(self, event):
         self.stop_measurement()
