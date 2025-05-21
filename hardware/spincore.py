@@ -1,7 +1,8 @@
 from ctypes import CDLL, POINTER, c_int, c_char_p, create_string_buffer
 import os
 
-dll_path = os.path.abspath('./hardware/generator_lib.dll')
+
+dll_path = os.path.abspath('./hardware/spinCoreTest.dll')
 lib = CDLL(dll_path)
 
 StrBuild = lib.StrBuild
@@ -16,6 +17,14 @@ pdPWM = lib.pb_PWM
 pdPWM.restype = c_int
 pdPWM.argtypes = [c_int, POINTER(POINTER(c_int)), c_int]
 
+startPb = lib.pb_S
+startPb.restype = c_int
+
+stopPb = lib.pb_R
+stopPb.restype = c_int
+
+closePb = lib.pb_C
+closePb.restype = c_int
 
 def _config_builder(num_channels, channel_numbers, impulse_counts, start_times, stop_times):
     result = [str(num_channels)]
@@ -45,5 +54,11 @@ def impulse_builder(num_channels: int, channel_numbers: list[int], impulse_count
         _config_builder(num_channels, channel_numbers, impulse_counts, start_times, stop_times).encode("utf-8"))), repeat_time, pulse_scale,
         rep_scale)
 
-
+def impulse_builder_Cold(num_channels: int, channel_numbers: list[int], impulse_counts: list[int], start_times: list[int],
+                    stop_times: list[int], repeat_time, pulse_scale, rep_scale):
+    #pulse_scale, rep_scale 1- нс, 1E3 мкс ...
+    setPb(StrBuild(create_string_buffer(
+        _config_builder(num_channels, channel_numbers, impulse_counts, start_times, stop_times).encode("utf-8"))), repeat_time, pulse_scale,
+        rep_scale)
+    
 impulse_builder(1, [0], [1], [0], [10], 10,1,1)
