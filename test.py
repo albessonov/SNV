@@ -13,7 +13,7 @@ logging.getLogger("scapy.runtime").setLevel(logging.ERROR)
 
 RES = "USB0::0x1AB1::0x099C::DSG3G264300050::INSTR"
 #Настройка частоты и мощности dbm
-start = 2845*1E6
+start = 2855*1E6
 stop = 2860*1E6
 step =50*1E3
 # Мощность dbm
@@ -21,7 +21,8 @@ gain = -30
 # Время накопления
 time_to_collect = 5
 # Количество усреднений
-n_avg = 5
+n_avg = 2
+assert n_avg > 0
 
 rm = ResourceManager()
 dev = rm.open_resource(RES)
@@ -101,6 +102,9 @@ for n in range(n_avg+1):
     print("Текущее усреднение:", n)
     if n == n_avg:
          ph = [ph[i]/n_avg for i in range(len(ph))]
+
+dev.write(":OUTP 0")
+dev.close()
 
 plt.plot(frequencies[1:], ph[1:])
 plt.show()

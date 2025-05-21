@@ -13,16 +13,24 @@ logging.getLogger("scapy.runtime").setLevel(logging.ERROR)
 
 RES = "USB0::0x1AB1::0x099C::DSG3G264300050::INSTR"
 
+freq = 2.850*1E9 #MHz
 start = 10 #ns 
 stop = 1E3 #ns
 step = 10 #ns
+gain = -20
 # Количество усреднений
 n_avg = 10
+assert n_avg > 0
 
 rm = ResourceManager()
 dev = rm.open_resource(RES)
-#dev.write(":OUTP 1")
+dev.write(f':LEV {gain}dBm')
+dev.write(f':FREQ {freq}')
 
+dev.write(":OUTP 1")
+dev.write(":MOD:STAT 1")
+dev.write(":PULM:SOUR EXT")
+dev.write(":PULM:STAT 1")
 
 Times = np.arange(start=start, stop=(stop+step), step=step)
 ph = np.zeros(len(Times))
@@ -94,6 +102,12 @@ for n in range(n_avg+1):
     if n == n_avg:
          ph = [ph[i]/n_avg for i in range(len(ph))]
 sp.closePb
+
+dev.write(":OUTP 0")
+dev.write(":MOD:STAT 0")
+dev.write(":PULM:STAT 0")
+dev.close()
+
 plt.plot(Times[1:], ph[1:])
 plt.show()
 
