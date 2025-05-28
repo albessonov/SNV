@@ -13,15 +13,17 @@ logging.getLogger("scapy.runtime").setLevel(logging.ERROR)
 
 RES = "USB0::0x1AB1::0x099C::DSG3G264300050::INSTR"
 #Настройка частоты и мощности dbm
-start = 2855*1E6
-stop = 2860*1E6
-step =50*1E3
+start = 2840*1E6
+stop = 2900*1E6
+step = 500*1E3
 # Мощность dbm
 gain = -30
 # Время накопления
 time_to_collect = 5
 # Количество усреднений
-n_avg = 2
+n_avg =50
+#Название
+filename = ""
 assert n_avg > 0
 
 rm = ResourceManager()
@@ -105,7 +107,9 @@ for n in range(n_avg+1):
 
 dev.write(":OUTP 0")
 dev.close()
-
 plt.plot(frequencies[1:], ph[1:])
 plt.show()
+
+with open(f'{int(start)}_{int(stop)}_{int(step)}_{filename}.csv', 'w') as file:
+    file.writelines(f"{ph[i+1]}\n" for i in range(len(ph)-1))
 
