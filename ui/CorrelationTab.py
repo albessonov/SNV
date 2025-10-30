@@ -90,7 +90,8 @@ class HistWorker(QThread):
 
         self.result_ready.emit(hist)
 
-
+cnt_photon_1 = 0
+cnt_photon_2 = 0
 class SniffThread(QThread):
     packet_signal = pyqtSignal(dict)
 
@@ -98,9 +99,16 @@ class SniffThread(QThread):
         super().__init__()
         self.logger = logger
 
+
+
     def run(self):
+
+
         # Функция обратного вызова для обработки каждого пакета
         def packet_callback(packet):
+            photons = 0
+            global cnt_photon_1
+            global cnt_photon_2
             if packet.haslayer("Raw"):
                 payload = bytes(packet["Raw"].load)[42:]
 
@@ -111,7 +119,7 @@ class SniffThread(QThread):
 
                 try:
 
-                    # Распаковка данных
+                    """# Распаковка данных
                     package_id = struct.unpack('<H', payload[1:3])[0]
                     byte6 = struct.unpack('<B', payload[5:6])[0]
                     flag = (byte6 >> 7) & 1
@@ -147,7 +155,43 @@ class SniffThread(QThread):
                         "tp1_r": np.array(list(set(tp1_r))),
                         "tp2_r": np.array(list(set(tp2_r))),
 
+                    }"""
+                    package_id = struct.unpack('<H', payload[1:3])[0]
+
+                    byte6 = struct.unpack('<B', payload[5:6])[0]
+                    flag_valid = byte6 & 0x1
+                    flag_100ms = byte6 & 0x7
+
+                    cnt_photon = struct.unpack('<I', payload[6:10])[0]
+
+                    tp1 = [int.from_bytes(payload[10 + 4 * i:14 + 4 * i], byteorder="little") for i in range(0, 5 + 1)]
+                    tp1_a = [np.round((tp1[i] & 0x1F) * 0.18, 1) for i in range(len(tp1))]  # ns
+                    tp1_b = [np.round((tp1[i] >> 7) * 5, 1) for i in range(len(tp1))]  # ns
+                    tp1_r = [(tp1_a[i] + tp1_b[i]) for i in range(len(tp1_a))]  # ns
+
+                    tp2 = [int.from_bytes(payload[34 + 4 * i:38 + 4 * i], byteorder="little") for i in range(0, 5 + 1)]
+                    tp2_a = [np.round((tp2[i] & 0x1F) * 0.18, 1) for i in range(len(tp2))]  # ns
+                    tp2_b = [np.round((tp2[i] >> 7) * 5, 1) for i in range(len(tp2))]  # ns
+                    tp2_r = [(tp2_a[i] + tp2_b[i]) for i in range(len(tp2_a))]  # ns
+
+                    # Восстановление отдельных счётов
+                    if package_id % 2 == 0:
+                        cnt_photon_1 = 0
+                        cnt_photon_2 = cnt_photon
+                    else:
+                        cnt_photon_1 = cnt_photon
+                        cnt_photon_2 = 0
+
+                    result = {
+                        "package_id": package_id,
+                        "flag_valid": flag_valid,
+                        "cnt_photon_1": cnt_photon_1,
+                        "cnt_photon_2": cnt_photon_2,
+                        "tp1_r": tp1_r,
+                        "tp2_r": tp2_r,
+                        "flag": flag_100ms
                     }
+
                     if flag_valid == 1:
                         # Отправляем данные через сигнал
                         self.packet_signal.emit(result)
@@ -166,7 +210,7 @@ class CorrelationTab(QWidget):
         super().__init__()
         self.plot_thread = None
         self.logger = logger
-        self.photon_data = deque(maxlen=10000)
+        self.photon_data = deque(maxlen=100000)
         self.hist_data = None
         self.bins = None
         self.tau_max_ns = 100
