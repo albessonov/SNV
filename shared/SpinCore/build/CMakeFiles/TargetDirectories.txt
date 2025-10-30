@@ -1,0 +1,3 @@
+D:/UNV/shared/SpinCore/build/CMakeFiles/SpinCore.dir
+D:/UNV/shared/SpinCore/build/CMakeFiles/ALL_BUILD.dir
+D:/UNV/shared/SpinCore/build/CMakeFiles/ZERO_CHECK.dir

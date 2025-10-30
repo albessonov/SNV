@@ -8,8 +8,7 @@ from PyQt6.QtWidgets import QVBoxLayout, QWidget, QProgressBar, QHBoxLayout, QPu
 from matplotlib.backends.backend_qt import NavigationToolbar2QT
 from numpy import arange
 from pyvisa import ResourceManager
-from scapy.sendrecv import sniff
-
+import pcapy
 from hardware.rigol_rw import setup
 from hardware.spincore import impulse_builder
 from ui.CorrelationTab import MplCanvas
@@ -22,48 +21,64 @@ class SniffThread(QThread):
         super().__init__()
         self.logger = logger
         self.running = True
-
+        self.cap = None
     def run(self):
-        def packet_callback(packet):
-            if not self.running:
-                return
+        try:
+            self.cap = pcapy.open_live("Ethernet", 106, 0, 0)
+            self.cap.setfilter("udp and src host 192.168.1.2")
+            self.logger.log("Sniffer started on 'Ethernet'", "Info", "SniffThread")
+            self.cap.loop(-1, self.packet_callback)  # 0 = бесконечно
+        except Exception as e:
+            self.logger.log(f"Sniffer error: {e}", "Error", "SniffThread")
 
-            if packet.haslayer("Raw"):
-                payload = bytes(packet["Raw"].load)[42:]
-
-                if len(payload) < 58:
-                    return
-
-                try:
-                    package_id = struct.unpack('<H', payload[1:3])[0]
-                    byte6 = struct.unpack('<B', payload[5:6])[0]
-                    flag_valid = byte6 & 0x1
-                    flag_pos = (byte6 & 0x10) >> 4
-                    flag_neg = (byte6 & 0x8) >> 3
-                    count_pos = int.from_bytes(payload[58:61], byteorder="little")
-                    count_neg = int.from_bytes(payload[61:63], byteorder="little")
-
-                    result = {
-                        "package_id": package_id,
-                        "flag_valid": flag_valid,
-                        "flag_neg": flag_neg,
-                        "flag_pos": flag_pos,
-                        "count_neg": count_neg,
-                        "count_pos": count_pos
-                    }
-
-                    if flag_valid == 1 and (flag_pos == 1 or flag_neg == 1):
-                        self.packet_signal.emit(result)
-                except Exception as e:
-                    self.logger.log(f"Packet processing error: {e}", "Error", "SniffThread")
+    def packet_callback(self, header, packet):
+        """Обработка каждого пакета"""
+        if not self.running:
+            return
 
         try:
-            sniff(iface="Ethernet", filter="src host 192.168.1.2", prn=packet_callback, count=0)
+            # Берем полезную нагрузку после 42 байт заголовков Ethernet/IP/UDP
+            payload = packet[42:]
+            if len(payload) != 64:
+                self.logger.log(f"Wrong packet len", "Error", "PacketCallback")
+
+            # Разбор байт пакета
+            package_id = struct.unpack('<H', payload[1:3])[0]
+            byte6 = struct.unpack('<B', payload[5:6])[0]
+
+            flag_valid = byte6 & 0x1
+            flag_pos = (byte6 & 0x10) >> 4
+            flag_neg = (byte6 & 0x8) >> 3
+
+            count_pos = int.from_bytes(payload[58:61], byteorder="little")
+            count_neg = int.from_bytes(payload[61:63], byteorder="little")
+
+            result = {
+                "package_id": package_id,
+                "flag_valid": flag_valid,
+                "flag_neg": flag_neg,
+                "flag_pos": flag_pos,
+                "count_neg": count_neg,
+                "count_pos": count_pos
+            }
+
+            # Отправляем только валидные пакеты
+            if flag_valid == 1 and (flag_pos == 1 or flag_neg == 1):
+                self.packet_signal.emit(result)
+
         except Exception as e:
-            self.logger.log(f"{e}", "Error", "SniffThread")
+            self.logger.log(f"Packet processing error: {e}", "Error", "SniffThread")
 
     def stop(self):
+        """Остановка захвата"""
         self.running = False
+        try:
+            if self.cap:
+                # Прерываем cap.loop()
+                self.cap.breakloop()
+                self.logger.log("Sniffer stopped", "Info", "SniffThread")
+        except Exception as e:
+            self.logger.log(f"Error stopping sniffer: {e}", "Error", "SniffThread")
         self.quit()
 
 

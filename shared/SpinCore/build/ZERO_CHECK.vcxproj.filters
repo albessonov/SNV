@@ -1,0 +1,13 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <CustomBuild Include="D:\UNV\shared\SpinCore\build\CMakeFiles\ad302e29868f72d11de10548d2d01fad\generate.stamp.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="CMake Rules">
+      <UniqueIdentifier>{DE38B59E-5F11-381A-A996-B4333BFA1061}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>

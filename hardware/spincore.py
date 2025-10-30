@@ -1,8 +1,9 @@
 from ctypes import CDLL, POINTER, c_int, c_char_p, create_string_buffer
 import os
 
+current_dir = os.path.dirname(os.path.abspath(__file__))
 
-dll_path = os.path.abspath('./hardware/spinCoreTest.dll')
+dll_path = os.path.join(current_dir, '..', 'shared', 'SpinCore', 'build', 'bin', 'Release', 'SpinCore.dll')
 lib = CDLL(dll_path)
 
 StrBuild = lib.StrBuild
