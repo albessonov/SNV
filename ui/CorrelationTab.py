@@ -124,7 +124,7 @@ class SniffThread(QThread):
 
         try:
             # Пропускаем Ethernet/IP/UDP заголовки
-            payload = packet[32:]
+            payload = packet[42:]
 
             # Проверка размера
             if len(payload) < 64:
