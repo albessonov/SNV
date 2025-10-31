@@ -10,7 +10,7 @@ from fast_histogram import histogram1d
 from matplotlib.backends.backend_qt import NavigationToolbar2QT
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
-from scapy.sendrecv import sniff
+import pcapy
 
 class MplCanvas(FigureCanvasQTAgg):
 
@@ -97,68 +97,96 @@ class SniffThread(QThread):
     def __init__(self, logger):
         super().__init__()
         self.logger = logger
+        self.running = True
+        self.cap = None
 
     def run(self):
-        # Функция обратного вызова для обработки каждого пакета
-        def packet_callback(packet):
-            if packet.haslayer("Raw"):
-                payload = bytes(packet["Raw"].load)[42:]
+        #self.logger.log("I am photon counter", "Info", "SniffThread")
 
-                # Защита от неверного размера
-                if len(payload) < 58:
-                    self.logger.log(f"Некорректный размер пакета", "Error", "packet_callback")
-                    return
+        try:
 
-                try:
+            self.cap = pcapy.open_live("Ethernet", 106, 0, 0)
+            self.cap.setfilter("udp and src host 192.168.1.2")
 
-                    # Распаковка данных
-                    package_id = struct.unpack('<H', payload[1:3])[0]
-                    byte6 = struct.unpack('<B', payload[5:6])[0]
-                    flag = (byte6 >> 7) & 1
-                    flag_valid = byte6 & 0x1
+            self.logger.log("Sniffer started on 'Ethernet'", "Info", "SniffThread")
 
-                    flag_pos = (byte6 & 0x10) >> 4
-                    flag_neg = (byte6 & 0x8) >> 3
+            # Основной цикл захвата пакетов
+            self.cap.loop(0, self.packet_callback)
 
-                    cnt_photon_1 = struct.unpack('<H', payload[6:8])[0]
-                    cnt_photon_2 = struct.unpack('<H', payload[8:10])[0]
+        except Exception as e:
+            self.logger.log(f"Sniffer error: {e}", "Error", "SniffThread")
 
-                    tp1 = [int.from_bytes(payload[10 + 4 * i:14 + 4 * i], byteorder="little") for i in range(0, 5 + 1)]
-                    tp1_a = [np.round((tp1[i] & 0x1F) * 0.18, 1) for i in range(len(tp1))]  # ns
-                    tp1_b = [np.round((tp1[i] >> 7) * 5, 1) for i in range(len(tp1))]  # ns
-                    tp1_r = [(tp1_a[i] + tp1_b[i]) for i in range(len(tp1_a))]  # ns
+    def packet_callback(self, header, packet):
+        """Обработка каждого пакета"""
+        #print("Got packet")
+        if not self.running:
+            return
 
-                    tp2 = [int.from_bytes(payload[34 + 4 * i:38 + 4 * i], byteorder="little") for i in range(0, 5 + 1)]
-                    tp2_a = [np.round((tp2[i] & 0x1F) * 0.18, 1) for i in range(len(tp2))]  # ns
-                    tp2_b = [np.round((tp2[i] >> 7) * 5, 1) for i in range(len(tp2))]  # ns
-                    tp2_r = [(tp2_a[i] + tp2_b[i]) for i in range(len(tp2_a))]  # ns
+        try:
+            # Пропускаем Ethernet/IP/UDP заголовки
+            payload = packet[32:]
 
+            # Проверка размера
+            if len(payload) < 64:
+                self.logger.log("Некорректный размер пакета", "Error", "packet_callback")
+                return
 
-                    # Создаем словарь с результатами
-                    # FIXME Есть определённая избыточность в получаемых данных, стоит разделить на два метода: один чисто для счёта фотонов, другой для корелляции
-                    result = {
-                        "package_id": package_id,
-                        "flag": flag,
-                        "flag_valid": flag_valid,
-                        "flag_neg": flag_neg,
-                        "flag_pos": flag_pos,
-                        "cnt_photon_1": cnt_photon_1,
-                        "cnt_photon_2": cnt_photon_2,
-                        "tp1_r": np.array(list(set(tp1_r))),
-                        "tp2_r": np.array(list(set(tp2_r))),
+            # Распаковка служебных байт
+            package_id = struct.unpack('<H', payload[1:3])[0]
+            byte6 = struct.unpack('<B', payload[5:6])[0]
 
-                    }
-                    if flag_valid == 1:
-                        # Отправляем данные через сигнал
-                        self.packet_signal.emit(result)
-                except Exception:
-                    self.logger.log(f"Неудачный парсинг пакета", "Error", "packet_callback")
+            flag = (byte6 >> 7) & 1
+            flag_valid = byte6 & 0x1
+            flag_pos = (byte6 & 0x10) >> 4
+            flag_neg = (byte6 & 0x8) >> 3
 
-        while not self.isInterruptionRequested():
-            try:
-                 sniff(iface="Ethernet", filter="src host 192.168.1.2", prn=packet_callback, count=0)
-            except Exception as e:
-                self.logger.log(f"{e}", "Error", "SniffThread")
+            # Счётчики фотонов
+            cnt_photon_1 = struct.unpack('<H', payload[6:8])[0]
+            cnt_photon_2 = struct.unpack('<H', payload[8:10])[0]
+
+            # Временные метки TP1
+            tp1 = [int.from_bytes(payload[10 + 4 * i:14 + 4 * i], byteorder="little") for i in range(6)]
+            tp1_a = [np.round((t & 0x1F) * 0.18, 1) for t in tp1]  # ns
+            tp1_b = [np.round((t >> 7) * 5, 1) for t in tp1]        # ns
+            tp1_r = [a + b for a, b in zip(tp1_a, tp1_b)]
+
+            # Временные метки TP2
+            tp2 = [int.from_bytes(payload[34 + 4 * i:38 + 4 * i], byteorder="little") for i in range(6)]
+            tp2_a = [np.round((t & 0x1F) * 0.18, 1) for t in tp2]  # ns
+            tp2_b = [np.round((t >> 7) * 5, 1) for t in tp2]        # ns
+            tp2_r = [a + b for a, b in zip(tp2_a, tp2_b)]
+
+            # Формируем результат
+            result = {
+                "package_id": package_id,
+                "flag": flag,
+                "flag_valid": flag_valid,
+                "flag_neg": flag_neg,
+                "flag_pos": flag_pos,
+                "cnt_photon_1": cnt_photon_1,
+                "cnt_photon_2": cnt_photon_2,
+                "tp1_r": np.array(list(set(tp1_r))),
+                "tp2_r": np.array(list(set(tp2_r))),
+            }
+
+            # Передаём результат, если пакет валиден
+            if flag_valid == 1:
+                print("signal emitted")
+                self.packet_signal.emit(result)
+
+        except Exception as e:
+            self.logger.log(f"Неудачный парсинг пакета: {e}", "Error", "packet_callback")
+
+    def stop(self):
+        """Останавливает цикл cap.loop()"""
+        self.running = False
+        try:
+            if self.cap:
+                self.cap.breakloop()  # прерывает cap.loop()
+                self.logger.log("Sniffer stopped", "Info", "SniffThread")
+        except Exception as e:
+            self.logger.log(f"Error stopping sniffer: {e}", "Error", "SniffThread")
+        self.quit()
 
 
 class CorrelationTab(QWidget):

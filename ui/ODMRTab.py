@@ -24,21 +24,46 @@ class SniffThread(QThread):
         self.cap = None
     def run(self):
         try:
-            self.cap = pcapy.open_live("Ethernet", 106, 0, 0)
-            self.cap.setfilter("udp and src host 192.168.1.2")
+            '''self.cap = pcapy.open_live("Device\\NPF_Loopback", 96, 0, 0) #106
+            self.cap.setfilter("udp and src host localhost")
             self.logger.log("Sniffer started on 'Ethernet'", "Info", "SniffThread")
-            self.cap.loop(-1, self.packet_callback)  # 0 = бесконечно
+            self.cap.loop(-1, self.packet_callback)  # 0 = бесконечно'''
+            interfaces = pcapy.findalldevs()
+
+            if not interfaces:
+                print("Не найдены интерфейсы!")
+                return
+
+            # В Windows loopback интерфейс часто называется "Adapter for loopback traffic capture"
+            # или содержит "loopback". Если не нашли, используем первый интерфейс.
+            selected_iface = None
+            for iface in interfaces:
+                if 'loopback' in iface.lower() or '127.0.0.1' in iface:
+                    selected_iface = iface
+                    break
+
+            if not selected_iface:
+                selected_iface = interfaces[0]
+                print(f"Loopback интерфейс не найден, используем: {selected_iface}")
+            else:
+                print(f"Используем интерфейс: {selected_iface}")
+                self.cap = pcapy.open_live(selected_iface, 65536, True, 1000)
+                self.cap.setfilter("udp")
+                self.cap.loop(0,self.packet_callback)
         except Exception as e:
             self.logger.log(f"Sniffer error: {e}", "Error", "SniffThread")
 
     def packet_callback(self, header, packet):
         """Обработка каждого пакета"""
+        self.logger.log(f"Enter", "Error", "PacketCallback")
         if not self.running:
             return
 
         try:
             # Берем полезную нагрузку после 42 байт заголовков Ethernet/IP/UDP
-            payload = packet[42:]
+            print("got packet")
+
+            payload = packet[32:] #42
             if len(payload) != 64:
                 self.logger.log(f"Wrong packet len", "Error", "PacketCallback")
 
@@ -222,7 +247,7 @@ class ODMRTab(QWidget):
 
         self.plot_thread = None
         RES = "USB0::0x1AB1::0x099C::DSG3G264300050::INSTR"
-        self.rm = ResourceManager()
+        #self.rm = ResourceManager()
 
     def generate_frequencies(self):
         try:
